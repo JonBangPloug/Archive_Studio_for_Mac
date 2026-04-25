@@ -1,267 +1,173 @@
-# Archive Studio for Mac 1.0
+# Archive Studio for Mac
 
 **Archive Studio for Mac** is a community macOS adaptation of **Archive Studio**, originally developed by **Mark Humphries** and **Lianne C. Leddy**.
 
-It is a desktop tool for historians, archivists, and researchers who want to use AI models to transcribe, correct, translate, and export historical documents from images or PDFs.
+This desktop tool is designed for historians, archivists, and researchers who want to use AI models to transcribe, correct, translate, and export historical documents from images or PDFs.
 
-The app is designed for a local-first workflow: your projects, images, transcriptions, translations, task history, and exports are stored on your own computer.
-
----
-
-## Status
-
-This is an experimental community build for macOS.
-
-It is intended for researchers who are comfortable testing an early tool and checking AI outputs critically. The app can be useful for historical transcription workflows, but it should not be treated as a fully validated archival production system.
+> **Status: Experimental Community Build**
+> This app is intended for researchers comfortable testing an early tool and critically evaluating AI outputs. While useful for historical transcription workflows, it should not be treated as a fully validated archival production system.
 
 ---
 
-## Relationship to the original Archive Studio
+## Core Features
 
-This project is based on the original **Archive Studio** codebase by Mark Humphries and Lianne C. Leddy.
+Archive Studio for Mac is designed for a **local-first workflow**: your projects, images, transcriptions, translations, task history, and exports are stored on your own computer.
 
-The original project was developed as a Windows-oriented desktop application for AI-assisted archival transcription and analysis. This version adapts the concept for macOS and adds or emphasizes a more focused workflow around:
+* Create local projects from images or PDFs.
+* View page images directly inside the app.
+* Run AI transcription / OCR / HTR.
+* Correct AI transcriptions side-by-side with the page image.
+* Translate corrected transcriptions.
+* Edit text manually and track different text stages for each page.
+* Inspect detailed logs for failed API calls or tasks.
 
-- macOS desktop use
-- local project folders
-- AI transcription and correction
-- translation as a workflow step
-- export to TXT, Markdown, CSV, JSON, and JSONL
-- API key storage through macOS Keychain
-- a simpler project-based workflow for document transcription
-
-This repository should be understood as **Archive Studio for Mac: a community adaptation**, not as the official main Archive Studio project.
-
-Original project:  
-https://github.com/mhumphries2323/Archive_Studio
-
----
-
-## What the app does
-
-Archive Studio for Mac lets you:
-
-- create a local project from images or PDFs
-- view page images inside the app
-- run AI transcription / OCR / HTR
-- correct AI transcriptions against the page image
-- translate corrected transcriptions
-- edit text manually
-- keep different text stages for each page
-- export results as TXT, Markdown, CSV, JSON, or JSONL
-- inspect logs when API calls or tasks fail
-
-## The basic workflow is:
+### The Basic Workflow
 
 1. Import a PDF or folder of page images.
-2. Run transcription.
+2. Run the AI transcription.
 3. Review and correct the text.
-4. Optionally translate it.
+4. Optionally translate the corrected text.
 5. Export the results.
 6. Archive or delete the working project folder when finished.
 
 ---
 
-## Project folders
+## Project Structure and Text Stages
 
-Each project is stored as a local working folder.
+### Project Folders
+Each project is stored as a local working folder. A project is a workspace, not just a single text file. Once you have exported the files you need, you can archive or delete the project folder. **Warning:** If you delete the project folder before exporting, you will lose the working data inside it.
 
-A project folder may contain:
+A typical project folder structure looks like this:
 
-text
-images/          copied page images
-exports/         exported TXT / Markdown / CSV / JSON / JSONL files
-task_runs/       task history and task-related data
-project.db       SQLite project database
-project.db-wal   SQLite write-ahead log file
-project.db-shm   SQLite shared-memory file
+```text
+project-name/
+├── images/            # copied page images
+├── exports/           # exported TXT / Markdown / CSV / JSON / JSONL files
+├── task_runs/         # task history and task-related data
+├── project.db         # SQLite project database
+├── project.db-wal     # SQLite write-ahead log file
+└── project.db-shm     # SQLite shared-memory file
+```
 
-This is intentional. A project is a workspace, not just a single text file.
+### Text Stages
+The app stores text in stages. Each text version stores basic provenance, including the model used and timestamp. The original transcription is distinct from a translation; translation is treated as a derived interpretation.
 
-Once you have exported the files you need, you can archive or delete the project folder. If you delete the project folder before exporting, you may lose the working data inside it.
+* **Original:** The first AI transcription/OCR/HTR result.
+* **Corrected:** A corrected version checked against the source image.
+* **Translated:** A translation of the source text.
 
-## Text stages
+*Example Provenance:*
+`Stage: original | By: ai:google:gemini-3.1-pro-preview | At: 2026-04-25 08:09`
 
-The app stores text in stages.
+---
 
-Typical stages include:
+## AI Models and API Keys
 
-Original — the first AI transcription/OCR/HTR result
-Corrected — a corrected version checked against the image
-Translated — a translation of the source text
+The app utilizes API-based AI models from **Google Gemini**, **OpenAI**, and **Anthropic Claude**. 
+*For historical handwriting and difficult archival images, recent Gemini Pro models have performed very well in testing. You can change your default model under **Settings → Model Settings**.*
 
-The original transcription is not the same thing as a translation. Translation should be treated as a derived interpretation of the source transcription.
+### API Key Storage
+You must provide your own API keys. **Note:** API use incurs costs; check your provider’s pricing dashboard before processing large collections.
 
-Each text version stores basic provenance, including which model created it and when.
+* Keys entered through the app are securely stored in the **macOS Keychain**.
+* The app settings file stores provider choices and model names, but **never** the keys themselves.
 
-Example:
+Technical users can alternatively provide keys via environment variables (loaded as a fallback if not in Keychain):
 
-Stage: original | By: ai:google:gemini-3.1-pro-preview | At: 2026-04-25 08:09
-AI providers
-
-The app can use API-based AI models from:
-
-Google Gemini
-OpenAI
-Anthropic Claude
-
-You need your own API key from the provider you want to use.
-
-API use may cost money. Check the provider’s pricing and usage dashboard before processing large collections.
-
-API key storage
-
-On macOS, API keys entered through the app are stored in macOS Keychain.
-
-The app settings file stores provider choices and model names, but not the API keys themselves.
-
-Technical users can also provide keys with environment variables:
-
+```bash
 export OPENAI_API_KEY="..."
 export ANTHROPIC_API_KEY="..."
 export GOOGLE_API_KEY="..."
 export GEMINI_API_KEY="..."
+```
 
-Credentials are loaded from macOS Keychain first, then from environment variables.
+---
 
-## Recommended models
+## Export Formats
 
-For historical handwriting and difficult archival images, recent Gemini Pro models have often performed very well in testing.
+| Format | Description & Best Use Case |
+| :--- | :--- |
+| **TXT** | Neutral plain-text format. Best for simple reading and general reuse. |
+| **Markdown** | Readable structured text. Ideal for Obsidian, GitHub, and note-taking workflows where headings, page markers, and lists matter. |
+| **CSV** | Tabular export. Perfect for spreadsheet and database workflows. |
+| **JSON** | Structured data export. |
+| **JSONL** | One JSON object per line. Useful for automated pipelines and later processing. |
 
-The current default can be changed in the app under:
+---
 
-Settings → Model Settings
+## Installation & Development Setup
 
-You should experiment with different models on a small sample before running a large batch.
+This repository provides a Python source version and a local macOS launcher workflow.
 
-## Export formats
+**Requirements:**
+* macOS
+* Python 3.11 or newer
+* Git
+* API keys for AI features
 
-The app supports export to:
+### Setup Instructions
 
-TXT — plain text, useful for simple reading and reuse
-Markdown — readable structured text, useful for Obsidian, GitHub, and note-taking workflows
-CSV — tabular export for spreadsheet/database workflows
-JSON — structured export
-JSONL — one JSON object per line, useful for pipelines and later processing
-
-TXT and Markdown are both included because they serve different purposes. TXT is the neutral plain-text format. Markdown is better when headings, page markers, lists, and readable structure matter.
-
-Installation / development setup
-
-This repository currently provides a Python source version and a local macOS launcher workflow.
-
-## Requirements:
-
-macOS
-Python 3.11 or newer
-Git
-API keys for AI features
-
-## Clone the repository:
-
-git clone https://github.com/JonBangPloug/Archive_Studio_for_Mac.git
+1. **Clone the repository:**
+```bash
+git clone [https://github.com/JonBangPloug/Archive_Studio_for_Mac.git](https://github.com/JonBangPloug/Archive_Studio_for_Mac.git)
 cd Archive_Studio_for_Mac
+```
 
-Create a virtual environment:
-
+2. **Create and activate a virtual environment:**
+```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
+```
 
-Install dependencies:
-
+3. **Install dependencies:**
+```bash
 pip install -e ".[dev,ai]"
+```
 
-Run tests:
-
+4. **Run tests:**
+```bash
 pytest
+```
 
-Launch the app:
-
+5. **Launch the app:**
+```bash
 python -m archivestudio
-macOS clickable launcher
+```
 
-You can create a clickable local macOS launcher with:
+### macOS Clickable Launcher
+You can create a clickable local macOS `.app` bundle (output to `dist/`) with:
 
+```bash
 source .venv/bin/activate
 python scripts/build_macos_launcher.py
+```
+*Note: This is a convenience launcher tied to your current source checkout and virtual environment. It is not a fully portable macOS release. Rebuild it if you move the project folder or delete the virtual environment.*
 
-This creates a .app bundle in dist/.
+---
 
-Important: this launcher is a local convenience launcher, not a fully portable macOS release. It points to the current source checkout and virtual environment. If you move the project folder or delete the virtual environment, rebuild the launcher.
+## Security, Logs & Troubleshooting
 
-For wider distribution, the app should eventually be packaged with a real bundling tool such as PyInstaller, Briefcase, or py2app.
+**Security Best Practices:**
+* **Never** commit API keys to GitHub or store them in project folders.
+* Treat local project folders as sensitive research data, as they contain copied images and transcriptions.
 
-## Logs and troubleshooting
+**Troubleshooting:**
+The app writes logs to help diagnose issues like network errors, missing quotas, rate limits, or prompt failures. If a task is slow, check the logs. Successful API calls often appear as repeated `200 OK` responses. 
+*Do not share logs publicly without verifying they are free of private document text or local file paths.*
 
-The app writes logs to help diagnose problems such as:
+---
 
-wrong API key
-missing billing or quota
-rate limits
-network errors
-provider/model errors
-prompt/template errors
-application errors
+## About & Credits
 
-If a task appears to be running slowly, check the log. Successful API calls may appear as repeated 200 OK responses.
+### Relationship to the Original Archive Studio
+This project is based on the [original Archive Studio](https://github.com/mhumphries2323/Archive_Studio) codebase developed for Windows by Mark Humphries and Lianne C. Leddy. This community version adapts the concept for macOS, emphasizing local project folders, targeted export formats, and Keychain API storage.
 
-Do not share logs publicly without checking that they do not contain private document text or local file paths you want to keep private.
+### Citation and Attribution
+If you use this adaptation, please acknowledge both projects:
+* **Original:** Mark Humphries and Lianne C. Leddy, 2025. *ArchiveStudio 1.0 Beta*. Department of History: Wilfrid Laurier University.
+* **Mac Adaptation:** Jon Bang Ploug. *Archive Studio for Mac*, a community macOS adaptation.
 
-Security notes
-Do not commit API keys to GitHub.
-Do not store keys in project folders.
-API keys entered through the app are stored in macOS Keychain.
-Local project folders may contain copied page images and transcriptions, so treat them as research data.
-Limitations
-
-This is an experimental research tool.
-
-Current limitations may include:
-
-AI output must be checked by the user
-difficult handwriting may produce errors
-translation is interpretive and should be reviewed
-API calls require internet access
-large batches may take time
-the macOS launcher is currently local-machine oriented, not a notarized distributable app
-Citation and attribution
-
-This app is based on Archive Studio by Mark Humphries and Lianne C. Leddy.
-
-If you use this Mac adaptation, please cite or acknowledge both the original Archive Studio project and this community Mac version where relevant.
-
-Original Archive Studio citation:
-
-Mark Humphries and Lianne C. Leddy, 2025. ArchiveStudio 1.0 Beta. Department of History: Wilfrid Laurier University.
-
-Community Mac adaptation:
-
-Jon Bang Ploug, Archive Studio for Mac, community macOS adaptation of Archive Studio.
-
-## License
-
-This project follows the licensing terms of the original Archive Studio project.
-
-License: Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)
-
-You are free to share and adapt the material under the following terms:
-
-Attribution — give appropriate credit and indicate if changes were made
-NonCommercial — do not use the material for commercial purposes
-
-License text:
-https://creativecommons.org/licenses/by-nc/4.0/
-
-Acknowledgments
-
-Archive Studio for Mac builds on the original Archive Studio project by:
-
-Mark Humphries
-Lianne C. Leddy
-
-The app uses AI models and APIs provided by:
-
-OpenAI
-Google Gemini
-Anthropic Claude
-
+### License
+This project follows the original licensing terms: **[Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/)**. 
+You are free to share and adapt the material provided you give appropriate credit and do not use the material for commercial purposes.
+```
