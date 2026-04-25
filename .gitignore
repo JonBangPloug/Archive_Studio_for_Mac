@@ -1,0 +1,73 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+.venv-test/
+venv/
+env/
+ENV/
+
+# macOS files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build / packaging output
+build/
+dist/
+*.egg-info/
+.eggs/
+*.spec
+
+# Logs
+*.log
+logs/
+
+# Local settings / secrets
+.env
+.env.*
+settings.toml
+settings.local.toml
+api_keys.py
+service-account.json
+*.secret
+*.secrets
+*.key
+*.pem
+
+# Local Archive Studio project data
+ArchiveStudio Projects/
+archive_studio_projects/
+projects/
+runs/
+exports/
+validation_reports/
+task_runs/
+
+# SQLite runtime files
+*.db-shm
+*.db-wal
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.old
+
+# Jupyter / notebooks, if accidentally created
+.ipynb_checkpoints/
