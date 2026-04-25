@@ -51,7 +51,7 @@ Archive Studio for Mac lets you:
 - export results as TXT, Markdown, CSV, JSON, or JSONL
 - inspect logs when API calls or tasks fail
 
-The basic workflow is:
+## The basic workflow is:
 
 1. Import a PDF or folder of page images.
 2. Run transcription.
@@ -68,7 +68,7 @@ Each project is stored as a local working folder.
 
 A project folder may contain:
 
-```text
+text
 images/          copied page images
 exports/         exported TXT / Markdown / CSV / JSON / JSONL files
 task_runs/       task history and task-related data
@@ -80,7 +80,7 @@ This is intentional. A project is a workspace, not just a single text file.
 
 Once you have exported the files you need, you can archive or delete the project folder. If you delete the project folder before exporting, you may lose the working data inside it.
 
-Text stages
+## Text stages
 
 The app stores text in stages.
 
@@ -124,7 +124,7 @@ export GEMINI_API_KEY="..."
 
 Credentials are loaded from macOS Keychain first, then from environment variables.
 
-Recommended models
+## Recommended models
 
 For historical handwriting and difficult archival images, recent Gemini Pro models have often performed very well in testing.
 
@@ -134,7 +134,7 @@ Settings → Model Settings
 
 You should experiment with different models on a small sample before running a large batch.
 
-Export formats
+## Export formats
 
 The app supports export to:
 
@@ -150,14 +150,14 @@ Installation / development setup
 
 This repository currently provides a Python source version and a local macOS launcher workflow.
 
-Requirements:
+## Requirements:
 
 macOS
 Python 3.11 or newer
 Git
 API keys for AI features
 
-Clone the repository:
+## Clone the repository:
 
 git clone https://github.com/JonBangPloug/Archive_Studio_for_Mac.git
 cd Archive_Studio_for_Mac
@@ -191,7 +191,7 @@ Important: this launcher is a local convenience launcher, not a fully portable m
 
 For wider distribution, the app should eventually be packaged with a real bundling tool such as PyInstaller, Briefcase, or py2app.
 
-Logs and troubleshooting
+## Logs and troubleshooting
 
 The app writes logs to help diagnose problems such as:
 
@@ -238,7 +238,7 @@ Community Mac adaptation:
 
 Jon Bang Ploug, Archive Studio for Mac, community macOS adaptation of Archive Studio.
 
-License
+## License
 
 This project follows the licensing terms of the original Archive Studio project.
 
