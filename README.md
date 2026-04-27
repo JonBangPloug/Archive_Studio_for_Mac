@@ -158,6 +158,13 @@ python scripts/build_macos_launcher.py
 The app writes logs to help diagnose issues like network errors, missing quotas, rate limits, or prompt failures. If a task is slow, check the logs. Successful API calls often appear as repeated `200 OK` responses. 
 *Do not share logs publicly without verifying they are free of private document text or local file paths.*
 
+## 🛠️ Maintenance & Feedback
+
+As this project is a "machine under construction," your feedback is the fuel that keeps it running.
+
+* **Found a mechanical failure?** Please [Open an Issue](link-to-your-repo/issues) with a description of the bug.
+* **Have an idea for a new feature?** Start a thread in [Discussions](link-to-your-repo/discussions).
+
 ---
 
 ## About & Credits
