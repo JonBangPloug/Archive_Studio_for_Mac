@@ -21,7 +21,7 @@ class ProviderSelection:
 
     @property
     def used_fallback(self) -> bool:
-        return self.requested_provider != self.effective_provider
+        return self.message is not None or self.requested_provider != self.effective_provider
 
 
 def create_provider_from_settings(settings: AppSettings) -> ProviderSelection:
@@ -29,12 +29,12 @@ def create_provider_from_settings(settings: AppSettings) -> ProviderSelection:
     requested = settings.default_provider.strip().lower() or "demo"
 
     if requested == "demo":
-        provider = DemoAIProvider()
-        return ProviderSelection(
-            provider=provider,
-            requested_provider="demo",
-            effective_provider=provider.provider_name,
-            message=None,
+        return _demo_fallback(
+            requested=requested,
+            reason=(
+                "No real LLM is configured yet. Open Settings > Model, enable a "
+                "provider, enter its API key, and choose it as the LLM used for tasks."
+            ),
         )
 
     provider_settings = _provider_settings_for_name(settings, requested)

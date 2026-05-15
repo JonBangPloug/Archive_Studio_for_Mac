@@ -21,13 +21,14 @@ def _settings(*, default_provider: str = "demo") -> AppSettings:
     )
 
 
-def test_provider_factory_returns_demo_when_demo_is_selected() -> None:
+def test_provider_factory_flags_demo_as_not_configured_for_task_use() -> None:
     selection = create_provider_from_settings(_settings(default_provider="demo"))
 
     assert isinstance(selection.provider, DemoAIProvider)
     assert selection.requested_provider == "demo"
     assert selection.effective_provider == "demo"
-    assert selection.used_fallback is False
+    assert selection.used_fallback is True
+    assert "No real LLM" in (selection.message or "")
 
 
 def test_provider_factory_falls_back_when_provider_is_disabled() -> None:

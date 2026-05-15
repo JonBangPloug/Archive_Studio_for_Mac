@@ -15,6 +15,7 @@ from archivestudio.core.models import (
     TASK_STATUS_RUNNING,
     TaskRun,
 )
+from archivestudio.core.errors import classify_exception
 from archivestudio.core.project import Project
 
 
@@ -105,6 +106,50 @@ def complete_task_run(
         task_run.pages_completed = pages_completed
         task_run.pages_failed = pages_failed
         task_run.error_message = error_message
+
+
+def mark_task_run_failed(
+    project: Project,
+    *,
+    task_run_id: str,
+    pages_completed: int,
+    pages_failed: int,
+    error_message: str | None,
+) -> None:
+    """Best-effort transition for task runs that crash before normal completion."""
+    complete_task_run(
+        project,
+        task_run_id=task_run_id,
+        status=TASK_STATUS_FAILED,
+        pages_completed=pages_completed,
+        pages_failed=pages_failed,
+        error_message=error_message,
+    )
+
+
+def mark_task_run_failed_after_crash(
+    project: Project,
+    *,
+    task_run_id: str,
+    pages_requested: int,
+    pages_completed: int,
+    pages_failed: int,
+    error: BaseException,
+) -> None:
+    """Mark a task failed when an unexpected exception escapes task execution."""
+    report = classify_exception(error)
+    failed_count = max(pages_failed, max(0, pages_requested - pages_completed))
+    try:
+        mark_task_run_failed(
+            project,
+            task_run_id=task_run_id,
+            pages_completed=pages_completed,
+            pages_failed=failed_count,
+            error_message=f"{report.category}: {report.summary} {report.suggestion}",
+        )
+    except Exception:
+        # Preserve the original exception; this helper must never hide the crash.
+        return
 
 
 def final_status(pages_completed: int, pages_failed: int) -> str:

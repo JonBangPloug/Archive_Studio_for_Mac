@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from PIL import Image
+import pytest
 from sqlalchemy import select
 
 from archivestudio.core.ai.base import (
@@ -21,6 +22,7 @@ from archivestudio.core.models import (
     STAGE_ORIGINAL,
     STAGE_TRANSLATED,
     TASK_STATUS_COMPLETED,
+    TASK_STATUS_FAILED,
     Page,
     TaskRun,
     TextVersion,
@@ -362,5 +364,123 @@ def test_custom_transcription_preset_includes_custom_instructions_in_prompt(tmp_
         assert provider.last_transcription_prompts
         assert "Preserve page headers" in provider.last_transcription_prompts[0]
         assert "Additional user instructions" in provider.last_transcription_prompts[0]
+    finally:
+        project.close()
+
+
+def test_run_transcription_marks_task_run_failed_when_prompt_rendering_crashes(
+    tmp_path: Path,
+) -> None:
+    project = create_project(tmp_path / "project", name="Task Crash")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=1)
+    import_image_folder(project, source_dir, source_type="handwritten")
+
+    provider = FakeTranscriptionProvider()
+    base_preset = get_builtin_preset("Handwritten Transcription")
+    bad_preset = replace(
+        base_preset,
+        prompt_template=replace(
+            base_preset.prompt_template,
+            user_prompt_template="This placeholder will fail: {unknown_placeholder}",
+        ),
+    )
+
+    try:
+        with pytest.raises(KeyError):
+            run_transcription(project, provider, bad_preset)
+
+        with project.session() as session:
+            task_run = session.execute(select(TaskRun)).scalar_one()
+
+        assert task_run.status == TASK_STATUS_FAILED
+        assert task_run.pages_completed == 0
+        assert task_run.pages_failed == 1
+        assert task_run.completed_at is not None
+        assert task_run.error_message
+    finally:
+        project.close()
+
+
+def test_run_correction_marks_task_run_failed_when_prompt_rendering_crashes(
+    tmp_path: Path,
+) -> None:
+    project = create_project(tmp_path / "project", name="Correction Crash")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=1)
+    import_image_folder(project, source_dir, source_type="handwritten")
+
+    provider = FakeTranscriptionProvider()
+
+    try:
+        run_transcription(
+            project,
+            provider,
+            replace(get_builtin_preset("Handwritten Transcription"), batch_size=1),
+        )
+        base_preset = get_builtin_preset("Handwritten Correction")
+        bad_preset = replace(
+            base_preset,
+            prompt_template=replace(
+                base_preset.prompt_template,
+                user_prompt_template="This placeholder will fail: {unknown_placeholder}",
+            ),
+        )
+
+        with pytest.raises(KeyError):
+            run_correction(project, provider, bad_preset)
+
+        with project.session() as session:
+            task_run = session.execute(
+                select(TaskRun).where(TaskRun.task_type == "correct")
+            ).scalar_one()
+
+        assert task_run.status == TASK_STATUS_FAILED
+        assert task_run.pages_completed == 0
+        assert task_run.pages_failed == 1
+        assert task_run.completed_at is not None
+        assert task_run.error_message
+    finally:
+        project.close()
+
+
+def test_run_translation_marks_task_run_failed_when_prompt_rendering_crashes(
+    tmp_path: Path,
+) -> None:
+    project = create_project(tmp_path / "project", name="Translation Crash")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=1)
+    import_image_folder(project, source_dir, source_type="printed")
+
+    provider = FakeTranscriptionProvider()
+
+    try:
+        run_transcription(
+            project,
+            provider,
+            replace(get_builtin_preset("Printed Transcription"), batch_size=1),
+        )
+        base_preset = get_builtin_preset("Scholarly Translation to English")
+        bad_preset = replace(
+            base_preset,
+            prompt_template=replace(
+                base_preset.prompt_template,
+                user_prompt_template="This placeholder will fail: {unknown_placeholder}",
+            ),
+        )
+
+        with pytest.raises(KeyError):
+            run_translation(project, provider, bad_preset)
+
+        with project.session() as session:
+            task_run = session.execute(
+                select(TaskRun).where(TaskRun.task_type == "translate")
+            ).scalar_one()
+
+        assert task_run.status == TASK_STATUS_FAILED
+        assert task_run.pages_completed == 0
+        assert task_run.pages_failed == 1
+        assert task_run.completed_at is not None
+        assert task_run.error_message
     finally:
         project.close()

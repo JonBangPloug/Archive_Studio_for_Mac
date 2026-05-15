@@ -32,6 +32,7 @@ from archivestudio.core.tasks.runs import (
     create_task_run,
     emit_progress,
     final_status,
+    mark_task_run_failed_after_crash,
 )
 from archivestudio.core.tasks.text_versions import get_current_text_version, replace_current_text_version
 from archivestudio.core.tasks.types import TASK_TRANSLATE, TaskPreset
@@ -90,70 +91,24 @@ def run_translation(
     pages_completed = 0
     pages_failed = 0
 
-    _emit_task_progress(
-        progress_callback,
-        preset=preset,
-        total=len(target_pages),
-        completed=pages_completed,
-        failed=pages_failed,
-        message="Starting translation",
-    )
-
-    batch_size = max(1, preset.batch_size)
-    if not provider.supports_batching:
-        batch_size = 1
-    if preset.model_config.max_batch_pages > 0:
-        batch_size = min(batch_size, preset.model_config.max_batch_pages)
-
-    for batch in chunked(target_pages, batch_size):
-        current_pages = tuple(page.sequence for page in batch)
+    try:
         _emit_task_progress(
             progress_callback,
             preset=preset,
             total=len(target_pages),
             completed=pages_completed,
             failed=pages_failed,
-            current_pages=current_pages,
-            message="Sending translation request",
+            message="Starting translation",
         )
-        requests: list[TranslationRequest] = []
-        for page in batch:
-            prompt = _render_prompt(page, preset)
-            request = TranslationRequest(
-                page_id=page.id,
-                page_sequence=page.sequence,
-                source_text=page.source_text,
-                source_text_stage=page.source_text_stage,
-                source_text_version_id=page.source_text_version_id,
-                source_type=page.source_type,
-                source_language=preset.source_language,
-                target_language=preset.target_language,
-                prompt=prompt,
-            )
-            requests.append(request)
-            artifact_requests.append(
-                request_artifact(
-                    request,
-                    prompt_system=prompt.system,
-                    prompt_user=prompt.user,
-                    source_text=page.source_text,
-                    source_text_stage=page.source_text_stage,
-                    source_text_version_id=page.source_text_version_id,
-                )
-            )
 
-        try:
-            results = provider.translate_pages(requests, model_config=preset.model_config)
-        except Exception as exc:  # pragma: no cover - exercised by future error-path tests
-            report = classify_exception(exc)
-            log.exception(
-                "Translation batch failed for pages %s [%s]: %s",
-                [page.sequence for page in batch],
-                report.category,
-                report.summary,
-            )
-            pages_failed += len(requests)
-            errors.append(f"{report.category}: {report.summary} {report.suggestion}")
+        batch_size = max(1, preset.batch_size)
+        if not provider.supports_batching:
+            batch_size = 1
+        if preset.model_config.max_batch_pages > 0:
+            batch_size = min(batch_size, preset.model_config.max_batch_pages)
+
+        for batch in chunked(target_pages, batch_size):
+            current_pages = tuple(page.sequence for page in batch)
             _emit_task_progress(
                 progress_callback,
                 preset=preset,
@@ -161,19 +116,96 @@ def run_translation(
                 completed=pages_completed,
                 failed=pages_failed,
                 current_pages=current_pages,
-                message="Translation request failed",
+                message="Sending translation request",
             )
-            continue
+            requests: list[TranslationRequest] = []
+            for page in batch:
+                prompt = _render_prompt(page, preset)
+                request = TranslationRequest(
+                    page_id=page.id,
+                    page_sequence=page.sequence,
+                    source_text=page.source_text,
+                    source_text_stage=page.source_text_stage,
+                    source_text_version_id=page.source_text_version_id,
+                    source_type=page.source_type,
+                    source_language=preset.source_language,
+                    target_language=preset.target_language,
+                    prompt=prompt,
+                )
+                requests.append(request)
+                artifact_requests.append(
+                    request_artifact(
+                        request,
+                        prompt_system=prompt.system,
+                        prompt_user=prompt.user,
+                        source_text=page.source_text,
+                        source_text_stage=page.source_text_stage,
+                        source_text_version_id=page.source_text_version_id,
+                    )
+                )
 
-        result_map = {result.page_id: result for result in results}
-        with project.session() as session:
-            for request in requests:
-                result = result_map.get(request.page_id)
-                if result is None:
-                    message = f"Provider returned no translation result for page {request.page_sequence}"
-                    errors.append(message)
-                    log.error(message)
-                    pages_failed += 1
+            try:
+                results = provider.translate_pages(requests, model_config=preset.model_config)
+            except Exception as exc:  # pragma: no cover - exercised by future error-path tests
+                report = classify_exception(exc)
+                log.exception(
+                    "Translation batch failed for pages %s [%s]: %s",
+                    [page.sequence for page in batch],
+                    report.category,
+                    report.summary,
+                )
+                pages_failed += len(requests)
+                errors.append(f"{report.category}: {report.summary} {report.suggestion}")
+                _emit_task_progress(
+                    progress_callback,
+                    preset=preset,
+                    total=len(target_pages),
+                    completed=pages_completed,
+                    failed=pages_failed,
+                    current_pages=current_pages,
+                    message="Translation request failed",
+                )
+                continue
+
+            result_map = {result.page_id: result for result in results}
+            with project.session() as session:
+                for request in requests:
+                    result = result_map.get(request.page_id)
+                    if result is None:
+                        message = f"Provider returned no translation result for page {request.page_sequence}"
+                        errors.append(message)
+                        log.error(message)
+                        pages_failed += 1
+                        _emit_task_progress(
+                            progress_callback,
+                            preset=preset,
+                            total=len(target_pages),
+                            completed=pages_completed,
+                            failed=pages_failed,
+                            current_pages=(request.page_sequence,),
+                            message="No provider result",
+                        )
+                        continue
+                    artifact_responses.append(
+                        response_artifact(
+                            page_id=request.page_id,
+                            page_sequence=request.page_sequence,
+                            output_text=result.translated_text,
+                            raw_response=result.raw_response,
+                        )
+                    )
+
+                    text_version = replace_current_text_version(
+                        session,
+                        page_id=request.page_id,
+                        stage=definition.output_stage,
+                        content=_normalize_response_text(result.translated_text, preset.response_prefix),
+                        created_by=f"ai:{provider.provider_name}:{provider.model_id}",
+                        task_run_id=task_run_id,
+                        source_version_id=request.source_text_version_id,
+                    )
+                    created_text_version_ids.append(text_version.id)
+                    pages_completed += 1
                     _emit_task_progress(
                         progress_callback,
                         preset=preset,
@@ -181,73 +213,53 @@ def run_translation(
                         completed=pages_completed,
                         failed=pages_failed,
                         current_pages=(request.page_sequence,),
-                        message="No provider result",
+                        message="Translation saved",
                     )
-                    continue
-                artifact_responses.append(
-                    response_artifact(
-                        page_id=request.page_id,
-                        page_sequence=request.page_sequence,
-                        output_text=result.translated_text,
-                        raw_response=result.raw_response,
-                    )
-                )
 
-                text_version = replace_current_text_version(
-                    session,
-                    page_id=request.page_id,
-                    stage=definition.output_stage,
-                    content=_normalize_response_text(result.translated_text, preset.response_prefix),
-                    created_by=f"ai:{provider.provider_name}:{provider.model_id}",
-                    task_run_id=task_run_id,
-                    source_version_id=request.source_text_version_id,
-                )
-                created_text_version_ids.append(text_version.id)
-                pages_completed += 1
-                _emit_task_progress(
-                    progress_callback,
-                    preset=preset,
-                    total=len(target_pages),
-                    completed=pages_completed,
-                    failed=pages_failed,
-                    current_pages=(request.page_sequence,),
-                    message="Translation saved",
-                )
-
-    status = final_status(pages_completed, pages_failed)
-    complete_task_run(
-        project,
-        task_run_id=task_run_id,
-        status=status,
-        pages_completed=pages_completed,
-        pages_failed=pages_failed,
-        error_message="\n".join(errors) if errors else None,
-    )
-    try:
-        write_task_run_artifact(
+        status = final_status(pages_completed, pages_failed)
+        complete_task_run(
             project,
             task_run_id=task_run_id,
+            status=status,
+            pages_completed=pages_completed,
+            pages_failed=pages_failed,
+            error_message="\n".join(errors) if errors else None,
+        )
+        try:
+            write_task_run_artifact(
+                project,
+                task_run_id=task_run_id,
+                task_type=definition.task_type,
+                provider_name=provider.provider_name,
+                model_id=provider.model_id,
+                preset=preset,
+                requests=artifact_requests,
+                responses=artifact_responses,
+                errors=errors,
+            )
+        except Exception:
+            log.warning("Could not write translation task artifact %s", task_run_id, exc_info=True)
+        return TaskRunSummary(
+            task_run_id=task_run_id,
             task_type=definition.task_type,
-            provider_name=provider.provider_name,
-            model_id=provider.model_id,
-            preset=preset,
-            requests=artifact_requests,
-            responses=artifact_responses,
+            preset_name=preset.name,
+            pages_requested=len(target_pages),
+            pages_completed=pages_completed,
+            pages_failed=pages_failed,
+            status=status,
+            created_text_version_ids=created_text_version_ids,
             errors=errors,
         )
-    except Exception:
-        log.warning("Could not write translation task artifact %s", task_run_id, exc_info=True)
-    return TaskRunSummary(
-        task_run_id=task_run_id,
-        task_type=definition.task_type,
-        preset_name=preset.name,
-        pages_requested=len(target_pages),
-        pages_completed=pages_completed,
-        pages_failed=pages_failed,
-        status=status,
-        created_text_version_ids=created_text_version_ids,
-        errors=errors,
-    )
+    except Exception as exc:
+        mark_task_run_failed_after_crash(
+            project,
+            task_run_id=task_run_id,
+            pages_requested=len(target_pages),
+            pages_completed=pages_completed,
+            pages_failed=pages_failed,
+            error=exc,
+        )
+        raise
 
 
 def _emit_task_progress(

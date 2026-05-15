@@ -1132,7 +1132,7 @@ class MainWindow(QMainWindow):
         model_id = getattr(selection.provider, "model_id", "unknown")
         if selection.used_fallback and selection.message:
             self.provider_status_label.setText(
-                f"Task model: demo ({selection.requested_provider} unavailable)"
+                "Task model: not configured"
             )
             self.provider_status_label.setToolTip(selection.message)
             return
@@ -1539,16 +1539,29 @@ class MainWindow(QMainWindow):
         settings = load_app_settings()
         provider_selection = create_provider_from_settings(settings)
         if provider_selection.used_fallback and provider_selection.message:
-            QMessageBox.warning(
+            QMessageBox.critical(
                 self,
-                "Provider Fallback",
+                "Model Settings Required",
                 (
                     f"The configured provider '{provider_selection.requested_provider}' "
                     "could not be used.\n\n"
                     f"{provider_selection.message}\n\n"
-                    "ArchiveStudio will use the local demo provider for this run instead."
+                    "No task was run. This prevents placeholder demo output from "
+                    "being saved as real transcription text."
                 ),
             )
+            return None
+        if provider_selection.effective_provider == "demo":
+            QMessageBox.critical(
+                self,
+                "Model Settings Required",
+                (
+                    "The local demo provider is not available for normal task runs.\n\n"
+                    "Open Settings > Model, enable a real provider, enter its API key, "
+                    "and choose it as the LLM used for tasks."
+                ),
+            )
+            return None
         return provider_selection.provider
 
     def _choose_task_target_scope(self) -> TaskScopeSelection | None:
