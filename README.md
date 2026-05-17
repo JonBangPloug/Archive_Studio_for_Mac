@@ -7,9 +7,6 @@
 
 This desktop tool is designed for historians, archivists, and researchers who want to use AI models to transcribe, correct, translate, and export historical documents from images or PDFs.
 
-> **Status: Experimental Community Build**
-> This app is intended for researchers comfortable testing an early tool and critically evaluating AI outputs. While useful for historical transcription workflows, it should not be treated as a fully validated archival production system.
-
 ---
 
 ## Core Features
