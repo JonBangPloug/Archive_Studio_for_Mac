@@ -21,21 +21,32 @@ from archivestudio.core.ai.common import (
 )
 
 
+_REQUEST_TIMEOUT_SECONDS = 120.0
+
+
 class AnthropicProvider(AIProvider):
     """Provider adapter using the Anthropic Messages API."""
 
     provider_name = "anthropic"
     supports_batching = True
 
-    def __init__(self, *, api_key: str, model_id: str, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model_id: str,
+        client: Any | None = None,
+        model_slots: dict[str, str] | None = None,
+    ) -> None:
         self.model_id = model_id
+        self._model_slots = model_slots or {}
         if client is not None:
             self._client = client
             return
 
         import anthropic
 
-        self._client = anthropic.Anthropic(api_key=api_key)
+        self._client = anthropic.Anthropic(api_key=api_key, timeout=_REQUEST_TIMEOUT_SECONDS)
 
     def transcribe_pages(
         self,
@@ -154,7 +165,7 @@ class AnthropicProvider(AIProvider):
         image_path=None,
         image_paths: Sequence[Any] | None = None,
         model_id: str,
-        temperature: float,
+        temperature: float | None,
     ) -> tuple[str, str | None]:
         resolved_image_paths = list(image_paths or [])
         if image_path is not None:
@@ -174,18 +185,20 @@ class AnthropicProvider(AIProvider):
             )
         content.append({"type": "text", "text": user})
 
-        response = self._client.messages.create(
-            model=model_id,
-            max_tokens=4096,
-            temperature=temperature,
-            system=system,
-            messages=[
+        payload: dict[str, Any] = {
+            "model": model_id,
+            "max_tokens": 4096,
+            "system": system,
+            "messages": [
                 {
                     "role": "user",
                     "content": content,
                 }
             ],
-        )
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        response = self._client.messages.create(**payload)
         text = self._extract_text(response)
         return text, text
 
@@ -193,6 +206,9 @@ class AnthropicProvider(AIProvider):
         configured = getattr(model_config, "model_id", "")
         if configured and configured != "unset":
             return configured
+        tier = getattr(model_config, "model_tier", "strong")
+        if tier in self._model_slots and self._model_slots[tier]:
+            return self._model_slots[tier]
         return self.model_id
 
     def _extract_text(self, response: Any) -> str:

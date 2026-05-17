@@ -8,11 +8,12 @@ from typing import Sequence
 from sqlalchemy import select
 
 from archivestudio.core.ai.base import AIProvider
-from archivestudio.core.models import STAGE_CORRECTED, TextVersion
+from archivestudio.core.models import STAGE_CORRECTED, TASK_STATUS_CANCELLED, TextVersion
 from archivestudio.core.project import Project
 from archivestudio.core.tasks.correct import run_correction
 from archivestudio.core.tasks.registry import get_preset
 from archivestudio.core.tasks.runs import ProgressCallback, TaskRunSummary, final_status
+from archivestudio.core.tasks.cancellation import CancellationToken
 from archivestudio.core.tasks.transcribe import run_transcription
 from archivestudio.core.tasks.types import TaskPreset
 
@@ -45,6 +46,7 @@ def run_handwritten_htr_and_correction(
     transcription_preset: TaskPreset | None = None,
     correction_preset: TaskPreset | None = None,
     progress_callback: ProgressCallback | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> WorkflowRunSummary:
     """Run handwritten transcription followed by handwritten correction."""
     return _run_transcribe_and_correct_workflow(
@@ -58,6 +60,7 @@ def run_handwritten_htr_and_correction(
         transcription_preset=transcription_preset,
         correction_preset=correction_preset,
         progress_callback=progress_callback,
+        cancellation_token=cancellation_token,
     )
 
 
@@ -70,6 +73,7 @@ def run_printed_ocr_and_correction(
     transcription_preset: TaskPreset | None = None,
     correction_preset: TaskPreset | None = None,
     progress_callback: ProgressCallback | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> WorkflowRunSummary:
     """Run printed OCR followed by printed correction."""
     return _run_transcribe_and_correct_workflow(
@@ -83,6 +87,7 @@ def run_printed_ocr_and_correction(
         transcription_preset=transcription_preset,
         correction_preset=correction_preset,
         progress_callback=progress_callback,
+        cancellation_token=cancellation_token,
     )
 
 
@@ -98,6 +103,7 @@ def _run_transcribe_and_correct_workflow(
     transcription_preset: TaskPreset | None = None,
     correction_preset: TaskPreset | None = None,
     progress_callback: ProgressCallback | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> WorkflowRunSummary:
     """Run a transcription preset followed by its matching correction preset."""
     resolved_transcription_preset = transcription_preset or get_preset(transcription_preset_name)
@@ -108,12 +114,26 @@ def _run_transcribe_and_correct_workflow(
         page_ids=page_ids,
         page_sequences=page_sequences,
         progress_callback=progress_callback,
+        cancellation_token=cancellation_token,
     )
 
     step_summaries = [transcription_summary]
     created_text_version_ids = list(transcription_summary.created_text_version_ids)
     errors = list(transcription_summary.errors)
     pages_requested = transcription_summary.pages_requested
+
+    if transcription_summary.status == TASK_STATUS_CANCELLED:
+        return WorkflowRunSummary(
+            workflow_name=workflow_name,
+            pages_requested=pages_requested,
+            pages_completed=transcription_summary.pages_completed,
+            pages_failed=transcription_summary.pages_failed,
+            status=TASK_STATUS_CANCELLED,
+            final_stage=STAGE_CORRECTED,
+            step_summaries=step_summaries,
+            created_text_version_ids=created_text_version_ids,
+            errors=errors,
+        )
 
     if transcription_summary.pages_completed == 0:
         return WorkflowRunSummary(
@@ -153,6 +173,7 @@ def _run_transcribe_and_correct_workflow(
         resolved_correction_preset,
         page_ids=corrected_page_ids,
         progress_callback=progress_callback,
+        cancellation_token=cancellation_token,
     )
     step_summaries.append(correction_summary)
     created_text_version_ids.extend(correction_summary.created_text_version_ids)
@@ -160,7 +181,11 @@ def _run_transcribe_and_correct_workflow(
 
     pages_completed = correction_summary.pages_completed
     pages_failed = max(0, pages_requested - pages_completed)
-    status = final_status(pages_completed, pages_failed)
+    status = (
+        TASK_STATUS_CANCELLED
+        if correction_summary.status == TASK_STATUS_CANCELLED
+        else final_status(pages_completed, pages_failed)
+    )
 
     return WorkflowRunSummary(
         workflow_name=workflow_name,

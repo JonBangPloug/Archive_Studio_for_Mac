@@ -48,6 +48,7 @@ def test_save_and_load_app_settings_round_trip(tmp_path: Path, monkeypatch) -> N
     assert "sk-" not in rendered
     assert "google-key" not in rendered
     assert "api_key" not in rendered
+    assert "custom_model" not in rendered
     assert 'last_import_dir = "' in rendered
 
 

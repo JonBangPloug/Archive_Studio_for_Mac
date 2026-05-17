@@ -268,6 +268,8 @@ def test_prompt_dialog_builtin_details_can_be_saved_as_override(monkeypatch, qtb
     dialog.batch_size_spin.setValue(4)
     dialog.source_genre_edit.setText("Latin manuscript")
     dialog.preserve_line_breaks_checkbox.setChecked(False)
+    dialog.model_tier_combo.setCurrentIndex(dialog.model_tier_combo.findData("fast"))
+    dialog.temperature_edit.setText("0.2")
 
     assert dialog._save_current_preset() is True
 
@@ -275,6 +277,21 @@ def test_prompt_dialog_builtin_details_can_be_saved_as_override(monkeypatch, qtb
     assert saved.batch_size == 4
     assert saved.source_genre == "Latin manuscript"
     assert saved.preserve_line_breaks is False
+    assert saved.model_tier == "fast"
+    assert saved.temperature == 0.2
+
+
+def test_prompt_dialog_exposes_only_fast_and_strong_model_tiers(qtbot) -> None:
+    dialog = TaskPromptSettingsDialog()
+    qtbot.addWidget(dialog)
+
+    tiers = {
+        dialog.model_tier_combo.itemData(index)
+        for index in range(dialog.model_tier_combo.count())
+    }
+
+    assert tiers == {"fast", "strong"}
+    assert not hasattr(dialog, "concrete_model_edit")
 
 
 def test_prompt_dialog_rejects_unknown_placeholder(monkeypatch, qtbot) -> None:

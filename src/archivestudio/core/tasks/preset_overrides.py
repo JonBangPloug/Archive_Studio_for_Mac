@@ -23,6 +23,10 @@ class PresetOverride:
     preserve_line_breaks: bool | None = None
     preserve_marginalia: bool | None = None
     normalize_whitespace: bool | None = None
+    provider: str | None = None
+    model_tier: str | None = None
+    model_id: str | None = None
+    temperature: float | None = None
     source_language: str | None = None
     target_language: str | None = None
     translation_rules: str | None = None
@@ -75,6 +79,22 @@ def load_preset_overrides() -> dict[str, PresetOverride]:
                 if payload.get("normalize_whitespace") is not None
                 else None
             ),
+            provider=(
+                str(payload.get("provider", "")).strip()
+                if payload.get("provider") is not None
+                else None
+            ),
+            model_tier=(
+                str(payload.get("model_tier", "")).strip()
+                if payload.get("model_tier") is not None
+                else None
+            ),
+            model_id=(
+                str(payload.get("model_id", "")).strip()
+                if payload.get("model_id") is not None
+                else None
+            ),
+            temperature=_optional_float(payload.get("temperature")),
             source_language=(
                 str(payload.get("source_language", "")).strip()
                 if payload.get("source_language") is not None
@@ -111,6 +131,15 @@ def _load_json_or_quarantine(path: Path) -> Any:
     except json.JSONDecodeError:
         _quarantine_corrupt_file(path)
         return {}
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _quarantine_corrupt_file(path: Path) -> None:

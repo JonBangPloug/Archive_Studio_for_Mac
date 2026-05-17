@@ -21,6 +21,7 @@ from archivestudio.core.models import (
     STAGE_CORRECTED,
     STAGE_ORIGINAL,
     STAGE_TRANSLATED,
+    TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
     Page,
@@ -35,6 +36,7 @@ from archivestudio.core.tasks import (
     run_translation,
 )
 from archivestudio.core.tasks.artifacts import task_run_artifact_path
+from archivestudio.core.tasks.cancellation import CancellationToken
 from archivestudio.core.tasks.runs import TaskProgress
 
 
@@ -164,6 +166,46 @@ def test_run_transcription_creates_task_run_and_text_versions(tmp_path: Path) ->
         assert artifact["preset"]["name"] == "Handwritten Transcription"
         assert artifact["requests"][0]["prompt"]["user"]
         assert artifact["responses"][0]["raw_response"] == "raw:1:run-1"
+    finally:
+        project.close()
+
+
+def test_run_transcription_can_be_cancelled_between_pages(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "project", name="Cancel Task")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=3)
+    import_image_folder(project, source_dir, source_type="handwritten")
+
+    provider = FakeTranscriptionProvider()
+    preset = replace(get_builtin_preset("Handwritten Transcription"), batch_size=1)
+    token = CancellationToken()
+
+    def cancel_after_first_saved(progress: TaskProgress) -> None:
+        if progress.pages_completed >= 1:
+            token.cancel()
+
+    try:
+        summary = run_transcription(
+            project,
+            provider,
+            preset,
+            progress_callback=cancel_after_first_saved,
+            cancellation_token=token,
+        )
+
+        assert summary.status == TASK_STATUS_CANCELLED
+        assert summary.pages_requested == 3
+        assert summary.pages_completed == 1
+        assert summary.pages_failed == 0
+        assert summary.errors == ["Task cancelled by user"]
+        assert provider.calls == 1
+
+        with project.session() as session:
+            task_run = session.get(TaskRun, summary.task_run_id)
+            assert task_run is not None
+            assert task_run.status == TASK_STATUS_CANCELLED
+            versions = session.execute(select(TextVersion)).scalars().all()
+            assert len(versions) == 1
     finally:
         project.close()
 

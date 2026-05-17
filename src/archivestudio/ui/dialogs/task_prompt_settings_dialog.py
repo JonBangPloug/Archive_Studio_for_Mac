@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from archivestudio.core.config import load_app_settings
 from archivestudio.core.tasks import (
     StoredPreset,
     get_builtin_preset,
@@ -50,6 +51,18 @@ TASK_TYPE_LABELS = {
     "translate": "Translate",
 }
 
+PROVIDER_LABELS = {
+    "configurable": "App default",
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "google": "Google Gemini",
+}
+
+MODEL_TIER_LABELS = {
+    "fast": "Fast",
+    "strong": "Strong",
+}
+
 
 class TaskPromptSettingsDialog(QDialog):
     """Edit prompt instructions and manage a small user preset library."""
@@ -63,6 +76,7 @@ class TaskPromptSettingsDialog(QDialog):
         self._user_presets = load_user_presets()
         self._current_original_name: str | None = None
         self._current_is_builtin = True
+        self._current_model_id = "unset"
         self._loading_form = False
         self._loaded_form_state: tuple[object, ...] | None = None
 
@@ -109,6 +123,18 @@ class TaskPromptSettingsDialog(QDialog):
         self.preset_type_label = QLabel("")
         top_layout.addWidget(self.preset_type_label)
         preset_layout.addWidget(preset_row)
+        filter_row = QWidget(preset_box)
+        filter_layout = QHBoxLayout(filter_row)
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+        filter_layout.addWidget(QLabel("Show"))
+        self.task_filter_combo = QComboBox(self)
+        self.task_filter_combo.addItem("All task presets", userData="")
+        for task_type, label in TASK_TYPE_LABELS.items():
+            self.task_filter_combo.addItem(label, userData=task_type)
+        self.task_filter_combo.currentIndexChanged.connect(self._on_task_filter_changed)
+        filter_layout.addWidget(self.task_filter_combo)
+        filter_layout.addStretch(1)
+        preset_layout.addWidget(filter_row)
         self.preset_help_label = QLabel("")
         self.preset_help_label.setWordWrap(True)
         preset_layout.addWidget(self.preset_help_label)
@@ -201,6 +227,22 @@ class TaskPromptSettingsDialog(QDialog):
         self.source_genre_edit = QLineEdit(self)
         self.batch_size_spin = QSpinBox(self)
         self.batch_size_spin.setRange(1, 20)
+        self.provider_combo = QComboBox(self)
+        for provider, label in PROVIDER_LABELS.items():
+            self.provider_combo.addItem(label, userData=provider)
+        self.model_tier_combo = QComboBox(self)
+        for tier, label in MODEL_TIER_LABELS.items():
+            self.model_tier_combo.addItem(label, userData=tier)
+        self.resolved_model_label = QLabel("")
+        self.resolved_model_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.provider_resolution_label = QLabel("")
+        self.provider_resolution_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.temperature_edit = QLineEdit(self)
+        self.temperature_edit.setPlaceholderText("Blank = model default")
         self.preserve_line_breaks_checkbox = QCheckBox("Preserve line breaks", self)
         self.preserve_marginalia_checkbox = QCheckBox("Preserve marginalia", self)
         self.normalize_whitespace_checkbox = QCheckBox("Normalize whitespace", self)
@@ -208,7 +250,18 @@ class TaskPromptSettingsDialog(QDialog):
         metadata_form.addRow("Task type", self.task_type_combo)
         metadata_form.addRow("Source genre", self.source_genre_edit)
         metadata_form.addRow("Batch size", self.batch_size_spin)
+        metadata_form.addRow("Provider", self.provider_combo)
+        metadata_form.addRow("Model tier", self.model_tier_combo)
+        metadata_form.addRow("", self.provider_resolution_label)
+        metadata_form.addRow("Resolved model", self.resolved_model_label)
+        metadata_form.addRow("Temperature", self.temperature_edit)
         details_layout.addLayout(metadata_form)
+        temperature_hint = QLabel(
+            "Leave blank unless you need to control randomness. For transcription, blank or 0 is usually best.\n"
+            "Some models do not support temperature. If unsupported, ArchiveStudio will omit it automatically."
+        )
+        temperature_hint.setWordWrap(True)
+        details_layout.addWidget(temperature_hint)
 
         options_row = QWidget(details_box)
         options_layout = QHBoxLayout(options_row)
@@ -251,6 +304,11 @@ class TaskPromptSettingsDialog(QDialog):
         self.task_type_combo.currentIndexChanged.connect(self._on_form_changed)
         self.source_genre_edit.textChanged.connect(self._on_form_changed)
         self.batch_size_spin.valueChanged.connect(self._on_form_changed)
+        self.provider_combo.currentIndexChanged.connect(self._on_form_changed)
+        self.provider_combo.currentIndexChanged.connect(self._refresh_resolved_model_label)
+        self.model_tier_combo.currentIndexChanged.connect(self._on_form_changed)
+        self.model_tier_combo.currentIndexChanged.connect(self._refresh_resolved_model_label)
+        self.temperature_edit.textChanged.connect(self._on_form_changed)
         self.preserve_line_breaks_checkbox.toggled.connect(self._on_form_changed)
         self.preserve_marginalia_checkbox.toggled.connect(self._on_form_changed)
         self.normalize_whitespace_checkbox.toggled.connect(self._on_form_changed)
@@ -261,8 +319,11 @@ class TaskPromptSettingsDialog(QDialog):
     def _load_preset_names(self, *, select_name: str | None = None) -> None:
         self.preset_combo.blockSignals(True)
         self.preset_combo.clear()
+        task_filter = str(self.task_filter_combo.currentData() or "")
         for preset in list_presets():
             if preset.task_type not in TASK_TYPE_LABELS:
+                continue
+            if task_filter and preset.task_type != task_filter:
                 continue
             origin = "user" if preset.name in self._user_presets else "built-in"
             self.preset_combo.addItem(preset.name, userData=(preset.name, origin))
@@ -273,6 +334,9 @@ class TaskPromptSettingsDialog(QDialog):
             self.preset_combo.setCurrentIndex(max(0, index))
             self._load_selected_preset()
         self._refresh_export_buttons()
+
+    def _on_task_filter_changed(self) -> None:
+        self._load_preset_names(select_name=self.current_preset_name())
 
     def _find_preset_index(self, preset_name: str) -> int:
         for index in range(self.preset_combo.count()):
@@ -307,6 +371,12 @@ class TaskPromptSettingsDialog(QDialog):
         self._set_task_type(preset.task_type)
         self.source_genre_edit.setText(preset.source_genre)
         self.batch_size_spin.setValue(max(1, preset.batch_size))
+        self._set_provider(preset.model_config.provider)
+        self._set_model_tier(preset.model_config.model_tier)
+        self._current_model_id = preset.model_config.model_id or "unset"
+        self.temperature_edit.setText(
+            "" if preset.model_config.temperature is None else str(preset.model_config.temperature)
+        )
         self.preserve_line_breaks_checkbox.setChecked(preset.preserve_line_breaks)
         self.preserve_marginalia_checkbox.setChecked(preset.preserve_marginalia)
         self.normalize_whitespace_checkbox.setChecked(preset.normalize_whitespace)
@@ -315,6 +385,7 @@ class TaskPromptSettingsDialog(QDialog):
         self.response_prefix_edit.setPlainText(preset.response_prefix)
 
         self._apply_editability_state()
+        self._refresh_resolved_model_label()
         self._loaded_form_state = self._capture_form_state()
         self._loading_form = False
         self._set_form_dirty(False)
@@ -363,6 +434,7 @@ class TaskPromptSettingsDialog(QDialog):
     def _save_current(self) -> None:
         if not self._save_current_preset():
             return
+        self._show_saved_usage_message()
         self.accept()
 
     def _save_current_preset(self) -> bool:
@@ -381,6 +453,10 @@ class TaskPromptSettingsDialog(QDialog):
                 and stored.preserve_line_breaks == builtin.preserve_line_breaks
                 and stored.preserve_marginalia == builtin.preserve_marginalia
                 and stored.normalize_whitespace == builtin.normalize_whitespace
+                and stored.provider == builtin.model_config.provider
+                and stored.model_tier == builtin.model_config.model_tier
+                and stored.model_id == builtin.model_config.model_id
+                and stored.temperature == builtin.model_config.temperature
             ):
                 self._overrides.pop(builtin.name, None)
             else:
@@ -393,6 +469,10 @@ class TaskPromptSettingsDialog(QDialog):
                     preserve_line_breaks=stored.preserve_line_breaks,
                     preserve_marginalia=stored.preserve_marginalia,
                     normalize_whitespace=stored.normalize_whitespace,
+                    provider=stored.provider,
+                    model_tier=stored.model_tier,
+                    model_id=stored.model_id,
+                    temperature=stored.temperature,
                 )
             save_preset_overrides(self._overrides)
             self._loaded_form_state = self._capture_form_state()
@@ -451,6 +531,10 @@ class TaskPromptSettingsDialog(QDialog):
                 str(exc),
             )
             return None
+        try:
+            temperature = self._temperature_from_form()
+        except ValueError:
+            return None
 
         return StoredPreset(
             name=name,
@@ -463,6 +547,10 @@ class TaskPromptSettingsDialog(QDialog):
             preserve_line_breaks=self.preserve_line_breaks_checkbox.isChecked(),
             preserve_marginalia=self.preserve_marginalia_checkbox.isChecked(),
             normalize_whitespace=self.normalize_whitespace_checkbox.isChecked(),
+            provider=str(self.provider_combo.currentData() or "configurable"),
+            model_tier=str(self.model_tier_combo.currentData() or "strong"),
+            model_id=self._current_model_id or "unset",
+            temperature=temperature,
         )
 
     def _new_blank_preset(self) -> None:
@@ -485,6 +573,10 @@ class TaskPromptSettingsDialog(QDialog):
             preserve_line_breaks=True,
             preserve_marginalia=False,
             normalize_whitespace=False,
+            provider="configurable",
+            model_tier="strong",
+            model_id="unset",
+            temperature=None,
         )
         self._user_presets[preset.name] = preset
         save_user_presets(self._user_presets)
@@ -604,6 +696,24 @@ class TaskPromptSettingsDialog(QDialog):
                 return task_type
         return None
 
+    def _show_saved_usage_message(self) -> None:
+        task_type = str(self.task_type_combo.currentData() or "")
+        preset_name = self.current_preset_name() or self.name_edit.text().strip()
+        panel_label = {
+            "transcribe": "Transcribe",
+            "correct": "Correct",
+            "translate": "Translate",
+        }.get(task_type, "the matching task")
+        QMessageBox.information(
+            self,
+            "Preset Saved",
+            (
+                f"'{preset_name}' was saved.\n\n"
+                f"Use it from Tasks > {panel_label}. The preset list for each task "
+                "only shows presets that match that task type."
+            ),
+        )
+
     def _prompt_for_new_name(self, title: str, suggested: str) -> str | None:
         while True:
             name, ok = QInputDialog.getText(self, title, "Preset name:", text=suggested)
@@ -628,6 +738,55 @@ class TaskPromptSettingsDialog(QDialog):
         if index >= 0:
             self.task_type_combo.setCurrentIndex(index)
 
+    def _set_provider(self, provider: str) -> None:
+        index = self.provider_combo.findData(provider or "configurable")
+        self.provider_combo.setCurrentIndex(max(0, index))
+
+    def _set_model_tier(self, tier: str) -> None:
+        normalized = tier if tier in MODEL_TIER_LABELS else "strong"
+        index = self.model_tier_combo.findData(normalized)
+        self.model_tier_combo.setCurrentIndex(max(0, index))
+
+    def _refresh_resolved_model_label(self, *_args: object) -> None:
+        if not hasattr(self, "resolved_model_label"):
+            return
+        provider = str(self.provider_combo.currentData() or "configurable")
+        tier = str(self.model_tier_combo.currentData() or "strong")
+        resolved_provider, model_id = self._resolved_provider_model(provider, tier)
+        if provider == "configurable":
+            self.provider_resolution_label.setText(f"Using: {resolved_provider} / {tier}")
+            self.provider_resolution_label.setVisible(True)
+        else:
+            self.provider_resolution_label.clear()
+            self.provider_resolution_label.setVisible(False)
+        self.resolved_model_label.setText(f"{resolved_provider}: {model_id}")
+
+    def _resolved_provider_model(self, provider: str, tier: str) -> tuple[str, str]:
+        settings = load_app_settings()
+        provider_name = settings.default_provider if provider == "configurable" else provider
+        provider_settings = {
+            "openai": settings.openai,
+            "anthropic": settings.anthropic,
+            "google": settings.google,
+        }.get(provider_name)
+        if provider_settings is None:
+            return provider_name, "not configured"
+        return provider_name, provider_settings.model_for_tier(tier)
+
+    def _temperature_from_form(self) -> float | None:
+        value = self.temperature_edit.text().strip()
+        if not value:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                "Invalid Temperature",
+                "Temperature must be blank or a number, for example 0.2.",
+            )
+            raise
+
     def current_preset_name(self) -> str | None:
         data = self.preset_combo.currentData()
         if data is None:
@@ -648,6 +807,9 @@ class TaskPromptSettingsDialog(QDialog):
             self.task_type_combo.currentData(),
             self.source_genre_edit.text(),
             self.batch_size_spin.value(),
+            self.provider_combo.currentData(),
+            self.model_tier_combo.currentData(),
+            self.temperature_edit.text(),
             self.preserve_line_breaks_checkbox.isChecked(),
             self.preserve_marginalia_checkbox.isChecked(),
             self.normalize_whitespace_checkbox.isChecked(),

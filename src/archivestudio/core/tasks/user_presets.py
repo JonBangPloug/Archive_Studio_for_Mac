@@ -26,6 +26,10 @@ class StoredPreset:
     preserve_line_breaks: bool = True
     preserve_marginalia: bool = False
     normalize_whitespace: bool = False
+    provider: str = "configurable"
+    model_tier: str = "strong"
+    model_id: str = "unset"
+    temperature: float | None = None
     source_language: str = "auto-detect"
     target_language: str = "English"
     translation_rules: str = ""
@@ -41,10 +45,11 @@ class StoredPreset:
                 user_prompt_template=self.user_prompt_template,
             ),
             model_config=ModelConfig(
-                provider="configurable",
-                model_id="unset",
-                temperature=0.0,
+                provider=self.provider or "configurable",
+                model_id=self.model_id or "unset",
+                temperature=self.temperature,
                 max_batch_pages=max(1, self.batch_size),
+                model_tier=self.model_tier or "strong",
             ),
             batch_size=max(1, self.batch_size),
             preserve_line_breaks=self.preserve_line_breaks,
@@ -69,6 +74,10 @@ class StoredPreset:
             preserve_line_breaks=preset.preserve_line_breaks,
             preserve_marginalia=preset.preserve_marginalia,
             normalize_whitespace=preset.normalize_whitespace,
+            provider=preset.model_config.provider,
+            model_tier=preset.model_config.model_tier,
+            model_id=preset.model_config.model_id,
+            temperature=preset.model_config.temperature,
             source_language=preset.source_language,
             target_language=preset.target_language,
             translation_rules=preset.translation_rules,
@@ -109,6 +118,10 @@ def load_user_presets() -> dict[str, StoredPreset]:
             preserve_line_breaks=bool(payload.get("preserve_line_breaks", True)),
             preserve_marginalia=bool(payload.get("preserve_marginalia", False)),
             normalize_whitespace=bool(payload.get("normalize_whitespace", False)),
+            provider=str(payload.get("provider", "configurable")).strip() or "configurable",
+            model_tier=str(payload.get("model_tier", "strong")).strip() or "strong",
+            model_id=str(payload.get("model_id", "unset")).strip() or "unset",
+            temperature=_optional_float(payload.get("temperature")),
             source_language=str(payload.get("source_language", "auto-detect")).strip() or "auto-detect",
             target_language=str(payload.get("target_language", "English")).strip() or "English",
             translation_rules=str(payload.get("translation_rules", "")),
@@ -153,6 +166,10 @@ def import_user_presets(import_path: Path) -> dict[str, StoredPreset]:
             preserve_line_breaks=bool(payload.get("preserve_line_breaks", True)),
             preserve_marginalia=bool(payload.get("preserve_marginalia", False)),
             normalize_whitespace=bool(payload.get("normalize_whitespace", False)),
+            provider=str(payload.get("provider", "configurable")).strip() or "configurable",
+            model_tier=str(payload.get("model_tier", "strong")).strip() or "strong",
+            model_id=str(payload.get("model_id", "unset")).strip() or "unset",
+            temperature=_optional_float(payload.get("temperature")),
             source_language=str(payload.get("source_language", "auto-detect")).strip() or "auto-detect",
             target_language=str(payload.get("target_language", "English")).strip() or "English",
             translation_rules=str(payload.get("translation_rules", "")),
@@ -236,6 +253,15 @@ def list_preset_templates() -> list[PresetTemplate]:
 
 def _slugify(value: str) -> str:
     return "".join(char.lower() if char.isalnum() else "_" for char in value).strip("_")
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _load_json_or_quarantine(path: Path) -> Any:

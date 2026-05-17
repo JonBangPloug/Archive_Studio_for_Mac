@@ -58,6 +58,33 @@ def test_openai_provider_builds_multimodal_request(tmp_path: Path) -> None:
     assert input_payload[1]["image_url"].startswith("data:image/png;base64,")
 
 
+def test_openai_provider_omits_temperature_when_unset(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponsesAPI:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text=" transcribed text ", output=[])
+
+    client = SimpleNamespace(responses=FakeResponsesAPI())
+    provider = OpenAIProvider(api_key="sk-test", model_id="gpt-4.1-mini", client=client)
+    image_path = _build_image(tmp_path / "page.png")
+    request = TranscriptionRequest(
+        page_id="page-1",
+        page_sequence=1,
+        image_path=image_path,
+        source_type="printed",
+        prompt=PromptMessages(system="system prompt", user="user prompt"),
+    )
+
+    provider.transcribe_pages(
+        [request],
+        model_config=ModelConfig(provider="openai", model_id="unset", temperature=None),
+    )
+
+    assert "temperature" not in captured
+
+
 def test_openai_provider_batches_multiple_transcription_pages(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
@@ -106,6 +133,69 @@ def test_openai_provider_batches_multiple_transcription_pages(tmp_path: Path) ->
     assert input_payload[1]["type"] == "input_image"
     assert input_payload[2]["type"] == "input_image"
     assert "exact page_id values" in input_payload[0]["text"]
+
+
+def test_openai_provider_omits_temperature_for_models_that_do_not_support_it(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponsesAPI:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text=" text ", output=[])
+
+    client = SimpleNamespace(responses=FakeResponsesAPI())
+    provider = OpenAIProvider(api_key="sk-test", model_id="gpt-5-mini", client=client)
+    image_path = _build_image(tmp_path / "page.png")
+    request = TranscriptionRequest(
+        page_id="page-1",
+        page_sequence=1,
+        image_path=image_path,
+        source_type="printed",
+        prompt=PromptMessages(system="system", user="user"),
+    )
+
+    provider.transcribe_pages(
+        [request],
+        model_config=ModelConfig(provider="openai", model_id="unset", temperature=0.8),
+    )
+
+    assert captured["model"] == "gpt-5-mini"
+    assert "temperature" not in captured
+
+
+def test_openai_provider_retries_without_temperature_when_model_rejects_it(
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeResponsesAPI:
+        def create(self, **kwargs):
+            calls.append(dict(kwargs))
+            if "temperature" in kwargs:
+                raise ValueError("Unsupported parameter: 'temperature' is not supported with this model.")
+            return SimpleNamespace(output_text=" recovered text ", output=[])
+
+    client = SimpleNamespace(responses=FakeResponsesAPI())
+    provider = OpenAIProvider(api_key="sk-test", model_id="gpt-4.1-mini", client=client)
+    image_path = _build_image(tmp_path / "page.png")
+    request = TranscriptionRequest(
+        page_id="page-1",
+        page_sequence=1,
+        image_path=image_path,
+        source_type="printed",
+        prompt=PromptMessages(system="system", user="user"),
+    )
+
+    results = provider.transcribe_pages(
+        [request],
+        model_config=ModelConfig(provider="openai", model_id="unset", temperature=0.8),
+    )
+
+    assert results[0].transcription == "recovered text"
+    assert "temperature" in calls[0]
+    assert "temperature" not in calls[1]
 
 
 def test_anthropic_provider_builds_vision_message(tmp_path: Path) -> None:

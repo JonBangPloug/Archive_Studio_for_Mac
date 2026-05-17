@@ -21,21 +21,37 @@ from archivestudio.core.ai.common import (
 )
 
 
+_REQUEST_TIMEOUT_SECONDS = 120.0
+_TEMPERATURE_UNSUPPORTED_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+class OpenAIRequestParameterError(ValueError):
+    """Raised when an OpenAI model rejects request parameters."""
+
+
 class OpenAIProvider(AIProvider):
     """Provider adapter using the OpenAI Responses API."""
 
     provider_name = "openai"
     supports_batching = True
 
-    def __init__(self, *, api_key: str, model_id: str, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model_id: str,
+        client: Any | None = None,
+        model_slots: dict[str, str] | None = None,
+    ) -> None:
         self.model_id = model_id
+        self._model_slots = model_slots or {}
         if client is not None:
             self._client = client
             return
 
         from openai import OpenAI
 
-        self._client = OpenAI(api_key=api_key)
+        self._client = OpenAI(api_key=api_key, timeout=_REQUEST_TIMEOUT_SECONDS)
 
     def transcribe_pages(
         self,
@@ -156,7 +172,7 @@ class OpenAIProvider(AIProvider):
         image_path: Any | None = None,
         image_paths: Sequence[Any] | None = None,
         model_id: str,
-        temperature: float,
+        temperature: float | None,
     ) -> tuple[str, str | None]:
         resolved_image_paths = list(image_paths or [])
         if image_path is not None:
@@ -171,17 +187,20 @@ class OpenAIProvider(AIProvider):
                 }
             )
 
-        response = self._client.responses.create(
-            model=model_id,
-            instructions=system,
-            temperature=temperature,
-            input=[
+        payload: dict[str, Any] = {
+            "model": model_id,
+            "instructions": system,
+            "input": [
                 {
                     "role": "user",
                     "content": content,
                 }
             ],
-        )
+        }
+        if temperature is not None and _supports_temperature(model_id):
+            payload["temperature"] = temperature
+
+        response = self._create_response(payload)
         text = self._extract_text(response)
         return text, getattr(response, "output_text", None)
 
@@ -189,7 +208,33 @@ class OpenAIProvider(AIProvider):
         configured = getattr(model_config, "model_id", "")
         if configured and configured != "unset":
             return configured
+        tier = getattr(model_config, "model_tier", "strong")
+        if tier in self._model_slots and self._model_slots[tier]:
+            return self._model_slots[tier]
         return self.model_id
+
+    def _create_response(self, payload: dict[str, Any]) -> Any:
+        try:
+            return self._client.responses.create(**payload)
+        except Exception as exc:
+            if "temperature" in payload and _is_unsupported_parameter_error(exc, "temperature"):
+                retry_payload = dict(payload)
+                retry_payload.pop("temperature", None)
+                try:
+                    return self._client.responses.create(**retry_payload)
+                except Exception as retry_exc:
+                    if _is_unsupported_parameter_error(retry_exc):
+                        raise OpenAIRequestParameterError(
+                            "OpenAI rejected a request parameter even after omitting temperature. "
+                            "Choose another model or update the OpenAI model settings."
+                        ) from retry_exc
+                    raise
+            if _is_unsupported_parameter_error(exc):
+                raise OpenAIRequestParameterError(
+                    "OpenAI rejected a request parameter for the selected model. "
+                    "Choose another model or update the OpenAI model settings."
+                ) from exc
+            raise
 
     def _extract_text(self, response: Any) -> str:
         output_text = getattr(response, "output_text", None)
@@ -206,3 +251,17 @@ class OpenAIProvider(AIProvider):
         if text_parts:
             return "\n".join(text_parts).strip()
         raise ValueError("OpenAI response did not contain any text output")
+
+
+def _supports_temperature(model_id: str) -> bool:
+    normalized = model_id.strip().lower()
+    return not normalized.startswith(_TEMPERATURE_UNSUPPORTED_MODEL_PREFIXES)
+
+
+def _is_unsupported_parameter_error(error: BaseException, parameter: str | None = None) -> bool:
+    message = str(error).lower()
+    if "unsupported parameter" not in message:
+        return False
+    if parameter is None:
+        return True
+    return parameter.lower() in message

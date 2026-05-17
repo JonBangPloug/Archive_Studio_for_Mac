@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from archivestudio.core.tasks.cancellation import CancellationToken
 from archivestudio.ui.workers.task_worker import TaskWorker
 
 
@@ -14,6 +15,7 @@ class BackgroundTaskRunner(QObject):
 
     finished = Signal(object)
     failed = Signal(Exception)
+    cancelled = Signal(Exception)
     progress = Signal(object)
     running_changed = Signal(bool)
 
@@ -27,7 +29,12 @@ class BackgroundTaskRunner(QObject):
     def is_running(self) -> bool:
         return self._is_running
 
-    def start(self, runner: Callable[[], object]) -> None:
+    def start(
+        self,
+        runner: Callable[[], object],
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> None:
         """Start ``runner`` on a QThread.
 
         ``BackgroundTaskRunner`` intentionally supports only one active task.
@@ -36,15 +43,17 @@ class BackgroundTaskRunner(QObject):
         if self._is_running:
             raise RuntimeError("A background task is already running.")
 
-        worker = TaskWorker(runner)
+        worker = TaskWorker(runner, cancellation_token=cancellation_token)
         thread = QThread(self)
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
         worker.finished.connect(self.finished.emit)
         worker.failed.connect(self.failed.emit)
+        worker.cancelled.connect(self.cancelled.emit)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._clear_references)
@@ -53,6 +62,11 @@ class BackgroundTaskRunner(QObject):
         self._active_worker = worker
         self._set_running(True)
         thread.start()
+
+    def cancel(self) -> None:
+        """Ask the active task to stop at its next cancellation checkpoint."""
+        if self._active_worker is not None:
+            self._active_worker.cancel()
 
     def report_progress(self, progress: object) -> None:
         """Forward worker-thread progress updates to the UI thread."""

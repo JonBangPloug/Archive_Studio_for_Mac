@@ -25,15 +25,18 @@ DEFAULT_SETTINGS_TOML = """# ArchiveStudio user settings
 
 [providers.openai]
 enabled = false
-model = "gpt-4.1-mini"
+fast_model = "gpt-4.1-mini"
+strong_model = "gpt-4.1"
 
 [providers.anthropic]
 enabled = false
-model = "claude-sonnet-4-5"
+fast_model = "claude-3-5-haiku-latest"
+strong_model = "claude-sonnet-4-5"
 
 [providers.google]
 enabled = false
-model = "gemini-2.5-pro"
+fast_model = "gemini-2.5-flash"
+strong_model = "gemini-2.5-pro"
 
 [app]
 default_provider = "demo"
@@ -48,6 +51,13 @@ class ProviderSettings:
     api_key: str
     model: str
     credential_error: str | None = None
+    fast_model: str = ""
+    strong_model: str = ""
+
+    def model_for_tier(self, tier: str) -> str:
+        if tier == "fast":
+            return self.fast_model or self.model
+        return self.strong_model or self.model
 
 
 @dataclass(frozen=True)
@@ -81,17 +91,20 @@ def load_app_settings() -> AppSettings:
         openai=_provider_settings(
             "openai",
             providers.get("openai", {}),
-            default_model="gpt-4.1-mini",
+            default_fast_model="gpt-4.1-mini",
+            default_strong_model="gpt-4.1",
         ),
         anthropic=_provider_settings(
             "anthropic",
             providers.get("anthropic", {}),
-            default_model="claude-sonnet-4-5",
+            default_fast_model="claude-3-5-haiku-latest",
+            default_strong_model="claude-sonnet-4-5",
         ),
         google=_provider_settings(
             "google",
             providers.get("google", {}),
-            default_model="gemini-2.5-pro",
+            default_fast_model="gemini-2.5-flash",
+            default_strong_model="gemini-2.5-pro",
         ),
         default_provider=str(app.get("default_provider", "demo")),
         auto_open_last_work=bool(app.get("auto_open_last_work", False)),
@@ -137,14 +150,20 @@ def _provider_settings(
     provider_name: str,
     raw: dict[str, object],
     *,
-    default_model: str,
+    default_fast_model: str,
+    default_strong_model: str,
 ) -> ProviderSettings:
     api_key, credential_error = load_api_key(provider_name)
+    legacy_model = str(raw.get("model", default_strong_model)).strip()
+    fast_model = str(raw.get("fast_model", default_fast_model)).strip() or default_fast_model
+    strong_model = str(raw.get("strong_model", legacy_model)).strip() or default_strong_model
     return ProviderSettings(
         enabled=bool(raw.get("enabled", False)),
         api_key=api_key,
-        model=str(raw.get("model", default_model)),
+        model=strong_model,
         credential_error=credential_error,
+        fast_model=fast_model,
+        strong_model=strong_model,
     )
 
 
@@ -181,7 +200,8 @@ def _provider_lines(settings: ProviderSettings) -> str:
     return "\n".join(
         [
             f"enabled = {_bool_literal(settings.enabled)}",
-            f'model = "{_escape_toml_string(settings.model)}"',
+            f'fast_model = "{_escape_toml_string(settings.fast_model or settings.model)}"',
+            f'strong_model = "{_escape_toml_string(settings.strong_model or settings.model)}"',
         ]
     )
 

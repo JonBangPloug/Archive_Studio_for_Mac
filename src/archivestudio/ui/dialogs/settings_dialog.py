@@ -68,8 +68,9 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
 
         intro = QLabel(
-            "Choose which provider and model ArchiveStudio should use for Transcribe, Correct, "
-            "and Translate. "
+            "Choose which LLM ArchiveStudio should use for Transcribe, Correct, "
+            "and Translate. Each provider has Fast and Strong model slots; "
+            "prompt presets can choose one of those tiers. "
             "API keys are saved in macOS Keychain when possible. Changes take effect on the next task run."
         )
         intro.setWordWrap(True)
@@ -77,7 +78,8 @@ class SettingsDialog(QDialog):
 
         path_label = QLabel(
             f"Settings file: {self._settings.path}\n"
-            "This file stores provider choices and models, not API keys."
+            "This file stores provider choices and model names, not API keys. "
+            "Model names change over time; use the names shown in your provider documentation or dashboard."
         )
         path_label.setTextInteractionFlags(path_label.textInteractionFlags())
         path_label.setWordWrap(True)
@@ -138,13 +140,17 @@ class SettingsDialog(QDialog):
     def _load_provider_row(self, row: "_ProviderRow", settings: ProviderSettings) -> None:
         row.enabled_checkbox.setChecked(settings.enabled)
         row.api_key_edit.setText(settings.api_key)
-        row.model_edit.setText(settings.model)
+        row.fast_model_edit.setText(settings.fast_model or settings.model)
+        row.strong_model_edit.setText(settings.strong_model or settings.model)
 
     def _provider_settings_from_row(self, row: "_ProviderRow") -> ProviderSettings:
+        strong_model = row.strong_model_edit.text().strip()
         return ProviderSettings(
             enabled=row.enabled_checkbox.isChecked(),
             api_key=row.api_key_edit.text().strip(),
-            model=row.model_edit.text().strip(),
+            model=strong_model,
+            fast_model=row.fast_model_edit.text().strip(),
+            strong_model=strong_model,
         )
 
 
@@ -156,7 +162,8 @@ class _ProviderRow:
         self.enabled_checkbox = QCheckBox("Enabled")
         self.api_key_edit = QLineEdit()
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.model_edit = QLineEdit()
+        self.fast_model_edit = QLineEdit()
+        self.strong_model_edit = QLineEdit()
 
         key_row = QWidget()
         key_layout = QHBoxLayout(key_row)
@@ -168,7 +175,8 @@ class _ProviderRow:
 
         layout.addRow("", self.enabled_checkbox)
         layout.addRow("API key (Keychain)", key_row)
-        layout.addRow("Model", self.model_edit)
+        layout.addRow("Fast model", self.fast_model_edit)
+        layout.addRow("Strong model", self.strong_model_edit)
 
     def _toggle_key_visibility(self, checked: bool) -> None:
         mode = QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password

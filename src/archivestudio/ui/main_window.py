@@ -54,7 +54,7 @@ from archivestudio.core.export.profiles import (
     EXPORT_PROFILE_PATIENT_JOURNAL,
 )
 from archivestudio.core.ingest import import_image_files, import_image_folder, import_pdf
-from archivestudio.core.models import STAGES, Page, TextVersion
+from archivestudio.core.models import STAGES, TASK_STATUS_CANCELLED, Page, TextVersion
 from archivestudio.core.page_operations import (
     PageNotFoundError,
     delete_project_pages,
@@ -85,6 +85,7 @@ from archivestudio.core.tasks import (
     run_translation,
 )
 from archivestudio.core.tasks.runs import TaskProgress, TaskRunSummary
+from archivestudio.core.tasks.cancellation import CancellationToken
 from archivestudio.core.tasks.text_versions import get_current_text_version, save_manual_text_version
 from archivestudio.core.tasks.workflows import WorkflowRunSummary
 from archivestudio.ui.task_ranges import PageRangeParseError, parse_page_range_spec
@@ -129,6 +130,7 @@ class MainWindow(QMainWindow):
         self._background_tasks = BackgroundTaskRunner(self)
         self._background_tasks.finished.connect(self._on_background_task_finished)
         self._background_tasks.failed.connect(self._on_background_task_failed)
+        self._background_tasks.cancelled.connect(self._on_background_task_cancelled)
         self._background_tasks.progress.connect(self._on_background_task_progress)
         self._background_tasks.running_changed.connect(self._on_background_task_running_changed)
 
@@ -456,6 +458,10 @@ class MainWindow(QMainWindow):
         )
         self._task_progress_label.setVisible(False)
         status_bar.addPermanentWidget(self._task_progress_label)
+        self._cancel_task_button = QPushButton("Cancel Task", self)
+        self._cancel_task_button.clicked.connect(self._cancel_background_task)
+        self._cancel_task_button.setVisible(False)
+        status_bar.addPermanentWidget(self._cancel_task_button)
         self._busy_indicator = QProgressBar(self)
         self._busy_indicator.setRange(0, 0)
         self._busy_indicator.setTextVisible(True)
@@ -515,6 +521,8 @@ class MainWindow(QMainWindow):
         )
         self._busy_indicator.setVisible(self._task_is_running)
         self._task_progress_label.setVisible(self._task_is_running)
+        self._cancel_task_button.setVisible(self._task_is_running)
+        self._cancel_task_button.setEnabled(self._task_is_running)
 
     def _create_project_dialog(self) -> None:
         if not self._maybe_resolve_unsaved_changes():
@@ -1307,10 +1315,6 @@ class MainWindow(QMainWindow):
         if launch is None:
             return
 
-        provider = self._resolve_task_provider()
-        if provider is None:
-            return
-
         preset = self._load_launch_preset(
             launch.preset_name,
             title="Could Not Load Preset",
@@ -1332,29 +1336,36 @@ class MainWindow(QMainWindow):
                 ),
             )
 
+        provider = self._resolve_task_provider(preset.model_config)
+        if provider is None:
+            return
+
         if task_type == TASK_TRANSCRIBE:
-            runner = lambda: run_transcription(
+            runner = lambda token: run_transcription(
                 self.project,
                 provider,
                 preset,
                 page_ids=launch.page_ids,
                 progress_callback=self._background_tasks.report_progress,
+                cancellation_token=token,
             )
         elif task_type == TASK_CORRECT:
-            runner = lambda: run_correction(
+            runner = lambda token: run_correction(
                 self.project,
                 provider,
                 preset,
                 page_ids=launch.page_ids,
                 progress_callback=self._background_tasks.report_progress,
+                cancellation_token=token,
             )
         elif task_type == TASK_TRANSLATE:
-            runner = lambda: run_translation(
+            runner = lambda token: run_translation(
                 self.project,
                 provider,
                 preset,
                 page_ids=launch.page_ids,
                 progress_callback=self._background_tasks.report_progress,
+                cancellation_token=token,
             )
         else:
             self._show_error("Could Not Start Task", ValueError(f"Unsupported task type: {task_type}"))
@@ -1378,13 +1389,14 @@ class MainWindow(QMainWindow):
         self._start_two_step_transcribe_correction_workflow(
             workflow_name=HANDWRITTEN_HTR_CORRECTION_WORKFLOW,
             preset_name="Handwritten Transcription + Correction",
-            runner_factory=lambda provider, page_ids, transcription_preset, correction_preset, progress_callback: run_handwritten_htr_and_correction(
+            runner_factory=lambda provider, page_ids, transcription_preset, correction_preset, progress_callback, cancellation_token: run_handwritten_htr_and_correction(
                 self.project,
                 provider,
                 page_ids=page_ids,
                 transcription_preset=transcription_preset,
                 correction_preset=correction_preset,
                 progress_callback=progress_callback,
+                cancellation_token=cancellation_token,
             ),
             status_label="handwritten transcription + correction",
             transcription_preset_name="Handwritten Transcription",
@@ -1395,13 +1407,14 @@ class MainWindow(QMainWindow):
         self._start_two_step_transcribe_correction_workflow(
             workflow_name=PRINTED_OCR_CORRECTION_WORKFLOW,
             preset_name="Printed Transcription + Correction",
-            runner_factory=lambda provider, page_ids, transcription_preset, correction_preset, progress_callback: run_printed_ocr_and_correction(
+            runner_factory=lambda provider, page_ids, transcription_preset, correction_preset, progress_callback, cancellation_token: run_printed_ocr_and_correction(
                 self.project,
                 provider,
                 page_ids=page_ids,
                 transcription_preset=transcription_preset,
                 correction_preset=correction_preset,
                 progress_callback=progress_callback,
+                cancellation_token=cancellation_token,
             ),
             status_label="printed transcription + correction",
             transcription_preset_name="Printed Transcription",
@@ -1413,7 +1426,7 @@ class MainWindow(QMainWindow):
         *,
         workflow_name: str,
         preset_name: str,
-        runner_factory: Callable[[object, list[str] | None, object, object, object], object],
+        runner_factory: Callable[[object, list[str] | None, object, object, object, object], object],
         status_label: str,
         transcription_preset_name: str,
         correction_preset_name: str,
@@ -1427,10 +1440,6 @@ class MainWindow(QMainWindow):
 
         scope = self._choose_task_target_scope()
         if scope is None:
-            return
-
-        provider = self._resolve_task_provider()
-        if provider is None:
             return
 
         transcription_preset = self._load_launch_preset(
@@ -1463,6 +1472,10 @@ class MainWindow(QMainWindow):
                 ),
             )
 
+        provider = self._resolve_task_provider(transcription_preset.model_config)
+        if provider is None:
+            return
+
         self._active_task_launch = TaskLaunch(
             task_type=workflow_name,
             scope_label=scope.scope_label,
@@ -1472,12 +1485,13 @@ class MainWindow(QMainWindow):
             auto_selected_preset=True,
             pages_per_call=pages_per_call,
         )
-        runner = lambda: runner_factory(
+        runner = lambda token: runner_factory(
             provider,
             scope.page_ids,
             transcription_preset,
             correction_preset,
             self._background_tasks.report_progress,
+            token,
         )
         if not self._launch_background_task(runner):
             self._active_task_launch = None
@@ -1535,9 +1549,9 @@ class MainWindow(QMainWindow):
             self._show_error(title, exc)
             return None
 
-    def _resolve_task_provider(self):
+    def _resolve_task_provider(self, model_config=None):
         settings = load_app_settings()
-        provider_selection = create_provider_from_settings(settings)
+        provider_selection = create_provider_from_settings(settings, model_config=model_config)
         if provider_selection.used_fallback and provider_selection.message:
             QMessageBox.critical(
                 self,
@@ -1781,13 +1795,21 @@ class MainWindow(QMainWindow):
     def _selected_source_types(self, page_ids: list[str] | None) -> set[str | None]:
         return selected_source_types(self._page_records, page_ids)
 
-    def _launch_background_task(self, runner: Callable[[], object]) -> bool:
+    def _launch_background_task(self, runner: Callable[[CancellationToken], object]) -> bool:
+        token = CancellationToken()
         try:
-            self._background_tasks.start(runner)
+            self._background_tasks.start(lambda: runner(token), cancellation_token=token)
         except RuntimeError as exc:
             self._show_error("Could Not Start Task", exc)
             return False
         return True
+
+    def _cancel_background_task(self) -> None:
+        if not self._task_is_running:
+            return
+        self._cancel_task_button.setEnabled(False)
+        self.statusBar().showMessage("Cancelling task after the current API call finishes...", 0)
+        self._background_tasks.cancel()
 
     def _on_background_task_finished(self, summary: object) -> None:
         launch = self._active_task_launch
@@ -1802,14 +1824,17 @@ class MainWindow(QMainWindow):
                 PRINTED_OCR_CORRECTION_WORKFLOW: "Printed transcription + correction",
             }.get(summary.workflow_name, "Workflow")
             message = (
-                f"{workflow_label} finished: "
+                f"{workflow_label} cancelled: "
+                if summary.status == TASK_STATUS_CANCELLED
+                else f"{workflow_label} finished: "
+            ) + (
                 f"{summary.pages_completed}/{summary.pages_requested} pages completed"
             )
             if summary.pages_failed:
                 message += f", {summary.pages_failed} failed"
             self.statusBar().showMessage(message, 7000)
 
-            if summary.errors:
+            if summary.errors and summary.status != TASK_STATUS_CANCELLED:
                 for error_message in summary.errors:
                     log.warning("Workflow issue: %s", error_message)
                 QMessageBox.warning(
@@ -1825,14 +1850,17 @@ class MainWindow(QMainWindow):
             self._reload_pages(select_page_id=self._current_page_id)
 
             message = (
-                f"{summary.task_type.title()} finished: "
+                f"{summary.task_type.title()} cancelled: "
+                if summary.status == TASK_STATUS_CANCELLED
+                else f"{summary.task_type.title()} finished: "
+            ) + (
                 f"{summary.pages_completed}/{summary.pages_requested} pages completed"
             )
             if summary.pages_failed:
                 message += f", {summary.pages_failed} failed"
             self.statusBar().showMessage(message, 7000)
 
-            if summary.errors:
+            if summary.errors and summary.status != TASK_STATUS_CANCELLED:
                 for error_message in summary.errors:
                     log.warning("Task issue: %s", error_message)
                 QMessageBox.warning(
@@ -1843,6 +1871,11 @@ class MainWindow(QMainWindow):
 
     def _on_background_task_failed(self, error: Exception) -> None:
         self._show_error("Background Task Failed", error)
+
+    def _on_background_task_cancelled(self, error: Exception) -> None:
+        report = classify_exception(error)
+        log.info("Background task cancelled: %s", report.summary)
+        self.statusBar().showMessage(report.summary, 7000)
 
     def _on_background_task_progress(self, progress: object) -> None:
         if not isinstance(progress, TaskProgress):

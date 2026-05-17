@@ -43,6 +43,14 @@ def classify_exception(error: BaseException) -> ErrorReport:
     lowered = message.lower()
     class_name = error.__class__.__name__.lower()
 
+    if class_name == "taskcancelled" or "task cancelled by user" in lowered:
+        return _report(
+            error,
+            category="Task cancelled",
+            summary="Task cancelled by user.",
+            suggestion="Already completed pages were kept. Run the task again to continue.",
+        )
+
     if class_name == "prompttemplatevalidationerror" or _contains_any(
         lowered,
         "unsupported placeholder",
@@ -56,6 +64,17 @@ def classify_exception(error: BaseException) -> ErrorReport:
             category="Prompt/template problem",
             summary="The task prompt could not be rendered safely.",
             suggestion="Open Settings > Prompts and check the placeholders in the preset.",
+        )
+
+    if _contains_any(lowered, "unsupported parameter", "unsupported value", "invalid_request_error"):
+        return _report(
+            error,
+            category="Provider request setting",
+            summary="The selected AI model rejected one of the request settings.",
+            suggestion=(
+                "Choose a different model in Settings > Model, or remove unsupported "
+                "optional settings from the preset."
+            ),
         )
 
     if _contains_any(

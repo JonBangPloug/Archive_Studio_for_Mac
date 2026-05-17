@@ -102,3 +102,29 @@ def test_registry_exposes_user_preset(monkeypatch) -> None:
     assert preset.name == custom.name
     assert preset.task_type == "transcribe"
     assert custom.name in preset_names
+
+
+def test_user_preset_preserves_legacy_concrete_model_id(monkeypatch) -> None:
+    custom = StoredPreset(
+        name="Legacy Exact Model Preset",
+        task_type="transcribe",
+        source_genre="special source",
+        system_prompt="Special transcription rules",
+        user_prompt_template="Transcribe this page",
+        model_id="legacy-exact-model",
+        model_tier="fast",
+    )
+
+    monkeypatch.setattr(
+        "archivestudio.core.tasks.user_presets.load_user_presets",
+        lambda: {custom.name: custom},
+    )
+    monkeypatch.setattr(
+        "archivestudio.core.tasks.registry.load_user_presets",
+        lambda: {custom.name: custom},
+    )
+
+    preset = get_preset(custom.name)
+
+    assert preset.model_config.model_id == "legacy-exact-model"
+    assert preset.model_config.model_tier == "fast"

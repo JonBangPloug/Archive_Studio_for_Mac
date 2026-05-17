@@ -9,6 +9,10 @@ TASK_TRANSCRIBE = "transcribe"
 TASK_CORRECT = "correct"
 TASK_TRANSLATE = "translate"
 
+MODEL_TIER_FAST = "fast"
+MODEL_TIER_STRONG = "strong"
+MODEL_TIERS = (MODEL_TIER_FAST, MODEL_TIER_STRONG)
+
 
 @dataclass(frozen=True)
 class TaskDefinition:
@@ -36,8 +40,9 @@ class ModelConfig:
 
     provider: str
     model_id: str
-    temperature: float = 0.0
+    temperature: float | None = None
     max_batch_pages: int = 1
+    model_tier: str = MODEL_TIER_STRONG
 
 
 @dataclass(frozen=True)

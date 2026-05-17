@@ -55,7 +55,7 @@ _TRANSLATION_DEFINITION = TaskDefinition(
 _TRANSCRIPTION_BASE_MODEL = ModelConfig(
     provider="configurable",
     model_id="unset",
-    temperature=0.0,
+    temperature=None,
     max_batch_pages=8,
 )
 
@@ -415,6 +415,17 @@ def get_preset(name: str) -> TaskPreset:
             if override.normalize_whitespace is not None
             else preset.normalize_whitespace
         ),
+        model_config=replace(
+            preset.model_config,
+            provider=override.provider or preset.model_config.provider,
+            model_tier=override.model_tier or preset.model_config.model_tier,
+            model_id=override.model_id or preset.model_config.model_id,
+            temperature=(
+                override.temperature
+                if override.temperature is not None
+                else preset.model_config.temperature
+            ),
+        ),
         response_prefix=override.response_prefix,
         source_language=override.source_language or preset.source_language,
         target_language=override.target_language or preset.target_language,
@@ -460,6 +471,17 @@ def list_presets() -> list[TaskPreset]:
                     override.normalize_whitespace
                     if override.normalize_whitespace is not None
                     else preset.normalize_whitespace
+                ),
+                model_config=replace(
+                    preset.model_config,
+                    provider=override.provider or preset.model_config.provider,
+                    model_tier=override.model_tier or preset.model_config.model_tier,
+                    model_id=override.model_id or preset.model_config.model_id,
+                    temperature=(
+                        override.temperature
+                        if override.temperature is not None
+                        else preset.model_config.temperature
+                    ),
                 ),
                 response_prefix=override.response_prefix,
                 source_language=override.source_language or preset.source_language,

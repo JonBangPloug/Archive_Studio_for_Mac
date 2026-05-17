@@ -9,6 +9,7 @@ from itertools import islice
 from typing import Iterable, Iterator, Sequence, TypeVar
 
 from archivestudio.core.models import (
+    TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
     TASK_STATUS_PARTIAL,
@@ -150,6 +151,24 @@ def mark_task_run_failed_after_crash(
     except Exception:
         # Preserve the original exception; this helper must never hide the crash.
         return
+
+
+def mark_task_run_cancelled(
+    project: Project,
+    *,
+    task_run_id: str,
+    pages_completed: int,
+    pages_failed: int,
+) -> None:
+    """Persist a user-requested cancellation without treating it as a crash."""
+    complete_task_run(
+        project,
+        task_run_id=task_run_id,
+        status=TASK_STATUS_CANCELLED,
+        pages_completed=pages_completed,
+        pages_failed=pages_failed,
+        error_message="Task cancelled by user",
+    )
 
 
 def final_status(pages_completed: int, pages_failed: int) -> str:

@@ -53,6 +53,7 @@ TASK_STATUS_RUNNING = "running"
 TASK_STATUS_COMPLETED = "completed"
 TASK_STATUS_PARTIAL = "partial"
 TASK_STATUS_FAILED = "failed"
+TASK_STATUS_CANCELLED = "cancelled"
 
 
 # --- Source type (how a page was ingested/what it shows) --------------------

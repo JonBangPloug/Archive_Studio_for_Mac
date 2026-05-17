@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from archivestudio.core.ai.base import AIProvider, PromptMessages, TranscriptionRequest
 from archivestudio.core.errors import classify_exception
-from archivestudio.core.models import Page
+from archivestudio.core.models import TASK_STATUS_CANCELLED, Page
 from archivestudio.core.project import Project
 from archivestudio.core.tasks.artifacts import (
     request_artifact,
@@ -27,8 +27,10 @@ from archivestudio.core.tasks.runs import (
     create_task_run,
     emit_progress,
     final_status,
+    mark_task_run_cancelled,
     mark_task_run_failed_after_crash,
 )
+from archivestudio.core.tasks.cancellation import CancellationToken, TaskCancelled
 from archivestudio.core.tasks.text_versions import get_current_text_version, replace_current_text_version
 from archivestudio.core.tasks.types import TASK_TRANSCRIBE, TaskPreset
 
@@ -52,6 +54,7 @@ def run_transcription(
     page_sequences: Sequence[int] | None = None,
     skip_existing: bool = False,
     progress_callback: ProgressCallback | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> TaskRunSummary:
     """Run the transcription task for selected project pages."""
     if preset.task_type != TASK_TRANSCRIBE:
@@ -100,6 +103,8 @@ def run_transcription(
             batch_size = min(batch_size, preset.model_config.max_batch_pages)
 
         for batch in chunked(target_pages, batch_size):
+            if cancellation_token is not None:
+                cancellation_token.raise_if_cancelled()
             current_pages = tuple(page.sequence for page in batch)
             _emit_task_progress(
                 progress_callback,
@@ -155,6 +160,8 @@ def run_transcription(
             try:
                 results = provider.transcribe_pages(requests, model_config=preset.model_config)
             except Exception as exc:  # pragma: no cover - exercised by future error-path tests
+                if cancellation_token is not None and cancellation_token.is_cancelled:
+                    raise TaskCancelled() from exc
                 report = classify_exception(exc)
                 log.exception(
                     "Transcription batch failed for pages %s [%s]: %s",
@@ -222,6 +229,8 @@ def run_transcription(
                         current_pages=(request.page_sequence,),
                         message="Transcription saved",
                     )
+            if cancellation_token is not None:
+                cancellation_token.raise_if_cancelled()
 
         status = final_status(pages_completed, pages_failed)
         complete_task_run(
@@ -254,6 +263,25 @@ def run_transcription(
             pages_completed=pages_completed,
             pages_failed=pages_failed,
             status=status,
+            created_text_version_ids=created_text_version_ids,
+            errors=errors,
+        )
+    except TaskCancelled as exc:
+        errors.append(str(exc))
+        mark_task_run_cancelled(
+            project,
+            task_run_id=task_run_id,
+            pages_completed=pages_completed,
+            pages_failed=pages_failed,
+        )
+        return TaskRunSummary(
+            task_run_id=task_run_id,
+            task_type=definition.task_type,
+            preset_name=preset.name,
+            pages_requested=len(target_pages),
+            pages_completed=pages_completed,
+            pages_failed=pages_failed,
+            status=TASK_STATUS_CANCELLED,
             created_text_version_ids=created_text_version_ids,
             errors=errors,
         )

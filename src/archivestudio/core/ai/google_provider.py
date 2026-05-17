@@ -35,8 +35,10 @@ class GoogleGenAIProvider(AIProvider):
         model_id: str,
         client: Any | None = None,
         types_module: Any | None = None,
+        model_slots: dict[str, str] | None = None,
     ) -> None:
         self.model_id = model_id
+        self._model_slots = model_slots or {}
         self._types = types_module
         if client is not None:
             self._client = client
@@ -165,7 +167,7 @@ class GoogleGenAIProvider(AIProvider):
         image_path=None,
         image_paths: Sequence[Any] | None = None,
         model_id: str,
-        temperature: float,
+        temperature: float | None,
     ) -> tuple[str, str | None]:
         types = self._load_types()
         resolved_image_paths = list(image_paths or [])
@@ -179,13 +181,13 @@ class GoogleGenAIProvider(AIProvider):
                     mime_type=guess_image_mime_type(path),
                 )
             )
+        config_kwargs = {"system_instruction": system}
+        if temperature is not None:
+            config_kwargs["temperature"] = temperature
         response = self._client.models.generate_content(
             model=model_id,
             contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                temperature=temperature,
-            ),
+            config=types.GenerateContentConfig(**config_kwargs),
         )
         text = self._extract_text(response)
         return text, getattr(response, "text", None)
@@ -202,6 +204,9 @@ class GoogleGenAIProvider(AIProvider):
         configured = getattr(model_config, "model_id", "")
         if configured and configured != "unset":
             return configured
+        tier = getattr(model_config, "model_tier", "strong")
+        if tier in self._model_slots and self._model_slots[tier]:
+            return self._model_slots[tier]
         return self.model_id
 
     def _extract_text(self, response: Any) -> str:
