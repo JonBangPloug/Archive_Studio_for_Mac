@@ -1,7 +1,5 @@
-# Archive Studio for Mac
-<img width="100" height="100" alt="Archive Studio for Mac 1 0 Logo" src="https://github.com/user-attachments/assets/109898bc-c304-4154-94ee-e3a8c73c2fea" />
-
 # Archive Studio for Mac 1.1
+<img width="100" height="100" alt="Archive Studio for Mac 1.1 Logo" src="https://github.com/user-attachments/assets/109898bc-c304-4154-94ee-e3a8c73c2fea" />
 
 **Archive Studio for Mac** is a community macOS adaptation inspired by the original **Archive Studio** project developed by **Mark Humphries** and **Lianne C. Leddy**.
 
@@ -154,15 +152,6 @@ python scripts/build_macos_launcher.py
 **Troubleshooting:**
 The app writes logs to help diagnose issues like network errors, missing quotas, rate limits, or prompt failures. If a task is slow, check the logs. Successful API calls often appear as repeated `200 OK` responses. 
 *Do not share logs publicly without verifying they are free of private document text or local file paths.*
-
-## 🛠️ Maintenance & Feedback
-
-As this project is a "machine under construction," your feedback is the fuel that keeps it running.
-
-* **Found a mechanical failure?** Please [Open an Issue](link-to-your-repo/issues) with a description of the bug.
-* **Have an idea for a new feature?** Start a thread in [Discussions](link-to-your-repo/discussions).
-
----
 
 ## About & Credits
 

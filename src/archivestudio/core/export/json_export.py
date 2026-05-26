@@ -13,7 +13,6 @@ def render_json(bundle: ExportBundle) -> str:
     payload = {
         "project": {
             "name": bundle.project_name,
-            "root": bundle.project_root,
         },
         "export": {
             "format": bundle.export_format,
@@ -34,7 +33,6 @@ def render_jsonl(bundle: ExportBundle) -> str:
         json.dumps(
             {
                 "project_name": bundle.project_name,
-                "project_root": bundle.project_root,
                 "export_profile": bundle.export_profile,
                 "selected_stage": bundle.selected_stage,
                 "scope": bundle.scope_label,

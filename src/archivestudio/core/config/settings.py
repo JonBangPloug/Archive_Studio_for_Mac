@@ -44,7 +44,7 @@ auto_open_last_work = false
 last_import_dir = ""
 workspace_layout = "stacked"
 pages_pane_visible = true
-main_splitter_sizes = [340, 1000]
+main_splitter_sizes = [320, 1000]
 stacked_workspace_sizes = [520, 320]
 side_by_side_workspace_sizes = [700, 500]
 """
@@ -122,7 +122,7 @@ def load_app_settings() -> AppSettings:
         last_import_dir=str(app.get("last_import_dir", "")),
         workspace_layout=_workspace_layout(str(app.get("workspace_layout", "stacked"))),
         pages_pane_visible=bool(app.get("pages_pane_visible", True)),
-        main_splitter_sizes=_int_tuple(app.get("main_splitter_sizes", (340, 1000))),
+        main_splitter_sizes=_int_tuple(app.get("main_splitter_sizes", (320, 1000))),
         stacked_workspace_sizes=_int_tuple(app.get("stacked_workspace_sizes", (520, 320))),
         side_by_side_workspace_sizes=_int_tuple(
             app.get("side_by_side_workspace_sizes", (700, 500))

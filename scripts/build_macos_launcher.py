@@ -17,7 +17,7 @@ import tempfile
 from PIL import Image, ImageDraw, ImageFilter
 
 
-APP_NAME = "Archive Studio for Mac 1.0"
+APP_NAME = "Archive Studio for Mac 1.1"
 BUNDLE_NAME = f"{APP_NAME}.app"
 IDENTIFIER = "com.archivestudio.desktop"
 
@@ -63,8 +63,8 @@ def _write_info_plist(path: Path) -> None:
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": APP_NAME,
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "1.0",
-        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": "1.1",
+        "CFBundleVersion": "1.1",
         "LSMinimumSystemVersion": "12.0",
         "NSHighResolutionCapable": True,
     }

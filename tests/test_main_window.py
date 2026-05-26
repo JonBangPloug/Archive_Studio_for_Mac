@@ -131,8 +131,8 @@ def test_workspace_layout_toggle_is_persisted(monkeypatch, qtbot, tmp_path) -> N
     window = MainWindow()
     qtbot.addWidget(window)
 
-    assert window._last_pages_pane_width == 340
-    assert window.pages_panel.minimumWidth() == 240
+    assert window._last_pages_pane_width == 320
+    assert window.pages_panel.minimumWidth() == 160
     assert window.move_page_down_button.text() == "Down"
     assert window.rotate_pages_button.text() == "Rotate"
     assert window.delete_page_button.text() == "Delete"
@@ -155,7 +155,7 @@ def test_pages_pane_can_be_hidden_and_restored(monkeypatch, qtbot, tmp_path) -> 
         path=tmp_path / "settings.toml",
         workspace_layout=WORKSPACE_LAYOUT_STACKED,
         pages_pane_visible=True,
-        main_splitter_sizes=(240, 1000),
+        main_splitter_sizes=(170, 1000),
         stacked_workspace_sizes=(520, 320),
         side_by_side_workspace_sizes=(700, 500),
     )
@@ -173,19 +173,66 @@ def test_pages_pane_can_be_hidden_and_restored(monkeypatch, qtbot, tmp_path) -> 
 
     window = MainWindow()
     qtbot.addWidget(window)
-    window.main_splitter.setSizes([180, 1000])
+    window.main_splitter.setSizes([180, main_window_module.PAGES_PANE_TOGGLE_WIDTH, 1000])
     window._apply_pages_pane_visibility(False, persist=True)
 
     assert window.show_pages_pane_action.isChecked() is False
     assert window.pages_panel.isHidden() is True
+    assert window.pages_pane_toggle_bar.isHidden() is False
+    assert window.pages_pane_toggle_button.text() == ">"
     assert saved[-1].pages_pane_visible is False
-    assert saved[-1].main_splitter_sizes[0] >= 240
+    assert saved[-1].main_splitter_sizes[0] >= 160
 
     window._apply_pages_pane_visibility(True, persist=True)
 
     assert window.show_pages_pane_action.isChecked() is True
     assert window.pages_panel.isHidden() is False
+    assert window.pages_pane_toggle_button.text() == "<"
     assert window.main_splitter.sizes()[0] > 0
+    assert saved[-1].pages_pane_visible is True
+
+
+def test_pages_pane_toggle_button_hides_and_restores(monkeypatch, qtbot, tmp_path) -> None:
+    settings = AppSettings(
+        openai=ProviderSettings(enabled=False, api_key="", model="gpt-test"),
+        anthropic=ProviderSettings(enabled=False, api_key="", model="claude-test"),
+        google=ProviderSettings(enabled=False, api_key="", model="gemini-test"),
+        default_provider="demo",
+        auto_open_last_work=False,
+        path=tmp_path / "settings.toml",
+        workspace_layout=WORKSPACE_LAYOUT_STACKED,
+        pages_pane_visible=True,
+        main_splitter_sizes=(180, 1000),
+        stacked_workspace_sizes=(520, 320),
+        side_by_side_workspace_sizes=(700, 500),
+    )
+    saved: list[AppSettings] = []
+
+    def fake_load_app_settings() -> AppSettings:
+        return saved[-1] if saved else settings
+
+    def fake_save_app_settings(value: AppSettings, *, store_credentials: bool = True):
+        saved.append(value)
+        return value.path
+
+    monkeypatch.setattr(main_window_module, "load_app_settings", fake_load_app_settings)
+    monkeypatch.setattr(main_window_module, "save_app_settings", fake_save_app_settings)
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window.pages_pane_toggle_button.click()
+
+    assert window.pages_panel.isHidden() is True
+    assert window.pages_pane_toggle_bar.isHidden() is False
+    assert window.pages_pane_toggle_button.text() == ">"
+    assert saved[-1].pages_pane_visible is False
+
+    window.pages_pane_toggle_button.click()
+
+    assert window.pages_panel.isHidden() is False
+    assert window.pages_pane_toggle_button.text() == "<"
+    assert saved[-1].main_splitter_sizes[0] >= 160
     assert saved[-1].pages_pane_visible is True
 
 
@@ -209,5 +256,5 @@ def test_cramped_saved_pages_pane_width_is_migrated(monkeypatch, qtbot, tmp_path
     window = MainWindow()
     qtbot.addWidget(window)
 
-    assert window._last_pages_pane_width == 340
-    assert window.pages_panel.minimumWidth() == 240
+    assert window._last_pages_pane_width == 160
+    assert window.pages_panel.minimumWidth() == 160

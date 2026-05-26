@@ -30,7 +30,6 @@ class ExportBundle:
     """Collected export payload before rendering to a file format."""
 
     project_name: str
-    project_root: str
     export_format: str
     export_profile: str
     selected_stage: str
@@ -78,7 +77,6 @@ def collect_export_bundle(
 
     return ExportBundle(
         project_name=project.name,
-        project_root=str(project.root),
         export_format=export_format,
         export_profile=export_profile,
         selected_stage=selected_stage,

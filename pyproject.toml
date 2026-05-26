@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "archivestudio"
-version = "1.0"
+version = "1.1"
 description = "Focused desktop tool for historical document transcription and OCR/HTR correction."
 readme = "README.md"
 requires-python = ">=3.11"

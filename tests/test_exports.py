@@ -92,6 +92,7 @@ def test_json_export_includes_all_current_text_versions(tmp_path) -> None:
 
         payload = json.loads(target.read_text(encoding="utf-8"))
         assert payload["project"]["name"] == "Journals"
+        assert "root" not in payload["project"]
         assert payload["export"]["selected_stage"] == STAGE_TRANSLATED
         assert payload["records"][0]["text_versions"][STAGE_ORIGINAL] == "orig"
         assert payload["records"][0]["text_versions"][STAGE_TRANSLATED] == "translated text"
@@ -142,6 +143,7 @@ def test_jsonl_export_writes_one_record_per_line(tmp_path) -> None:
 
         lines = [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines()]
         assert len(lines) == 2
+        assert "project_root" not in lines[0]
         assert lines[0]["page_sequence"] == 1
         assert lines[1]["page_sequence"] == 2
         assert lines[0]["selected_text"] == "page one"

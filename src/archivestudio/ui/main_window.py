@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -107,8 +109,9 @@ log = logging.getLogger(__name__)
 
 WORKSPACE_LAYOUT_STACKED = "stacked"
 WORKSPACE_LAYOUT_SIDE_BY_SIDE = "side_by_side"
-PAGES_PANE_DEFAULT_WIDTH = 340
-PAGES_PANE_MIN_EXPANDED_WIDTH = 240
+PAGES_PANE_DEFAULT_WIDTH = 320
+PAGES_PANE_MIN_EXPANDED_WIDTH = 160
+PAGES_PANE_TOGGLE_WIDTH = 22
 WORKSPACE_MIN_WIDTH = 240
 
 
@@ -436,26 +439,46 @@ class MainWindow(QMainWindow):
         page_header_layout.setContentsMargins(0, 0, 0, 0)
         page_header_layout.setSpacing(4)
         page_header_layout.addWidget(QLabel("Pages"))
-        page_button_layout = QHBoxLayout()
-        page_button_layout.setContentsMargins(0, 0, 0, 0)
-        page_button_layout.setSpacing(4)
-        self.move_page_up_button = QPushButton("Up", self)
+
+        page_button_grid = QGridLayout()
+        page_button_grid.setContentsMargins(0, 0, 0, 0)
+        page_button_grid.setHorizontalSpacing(4)
+        page_button_grid.setVerticalSpacing(4)
+        self.move_page_up_button = QToolButton(self)
+        self.move_page_up_button.setText("Up")
         self.move_page_up_button.setToolTip("Move selected page(s) up")
+        self.move_page_up_button.setAccessibleName("Move selected page(s) up")
         self.move_page_up_button.clicked.connect(lambda: self._move_selected_pages("up"))
-        page_button_layout.addWidget(self.move_page_up_button)
-        self.move_page_down_button = QPushButton("Down", self)
+        page_button_grid.addWidget(self.move_page_up_button, 0, 0)
+        self.move_page_down_button = QToolButton(self)
+        self.move_page_down_button.setText("Down")
         self.move_page_down_button.setToolTip("Move selected page(s) down")
+        self.move_page_down_button.setAccessibleName("Move selected page(s) down")
         self.move_page_down_button.clicked.connect(lambda: self._move_selected_pages("down"))
-        page_button_layout.addWidget(self.move_page_down_button)
-        self.rotate_pages_button = QPushButton("Rotate", self)
+        page_button_grid.addWidget(self.move_page_down_button, 0, 1)
+        self.rotate_pages_button = QToolButton(self)
+        self.rotate_pages_button.setText("Rotate")
         self.rotate_pages_button.setToolTip("Rotate selected page(s) 90 degrees")
+        self.rotate_pages_button.setAccessibleName("Rotate selected page(s) 90 degrees")
         self.rotate_pages_button.clicked.connect(self._rotate_selected_pages)
-        page_button_layout.addWidget(self.rotate_pages_button)
-        self.delete_page_button = QPushButton("Delete", self)
+        page_button_grid.addWidget(self.rotate_pages_button, 1, 0)
+        self.delete_page_button = QToolButton(self)
+        self.delete_page_button.setText("Delete")
         self.delete_page_button.setToolTip("Delete selected page(s)")
+        self.delete_page_button.setAccessibleName("Delete selected page(s)")
         self.delete_page_button.clicked.connect(self._delete_selected_page)
-        page_button_layout.addWidget(self.delete_page_button)
-        page_header_layout.addLayout(page_button_layout)
+        page_button_grid.addWidget(self.delete_page_button, 1, 1)
+        for column in range(2):
+            page_button_grid.setColumnStretch(column, 1)
+        for button in (
+            self.move_page_up_button,
+            self.move_page_down_button,
+            self.rotate_pages_button,
+            self.delete_page_button,
+        ):
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        page_header_layout.addLayout(page_button_grid)
         left_layout.addWidget(page_header)
         left_layout.addWidget(self.page_list)
 
@@ -495,19 +518,42 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(info_form)
         right_layout.addWidget(self.workspace_splitter, 1)
 
+        self.pages_pane_toggle_button = QToolButton(self)
+        self.pages_pane_toggle_button.setAutoRaise(True)
+        self.pages_pane_toggle_button.setFixedWidth(PAGES_PANE_TOGGLE_WIDTH)
+        self.pages_pane_toggle_button.setMinimumHeight(64)
+        self.pages_pane_toggle_button.clicked.connect(self._toggle_pages_pane_from_button)
+
+        self.pages_pane_toggle_bar = QWidget(self)
+        self.pages_pane_toggle_bar.setFixedWidth(PAGES_PANE_TOGGLE_WIDTH)
+        self.pages_pane_toggle_bar.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Expanding,
+        )
+        toggle_bar_layout = QVBoxLayout(self.pages_pane_toggle_bar)
+        toggle_bar_layout.setContentsMargins(0, 0, 0, 0)
+        toggle_bar_layout.setSpacing(0)
+        toggle_bar_layout.addStretch(1)
+        toggle_bar_layout.addWidget(self.pages_pane_toggle_button)
+        toggle_bar_layout.addStretch(1)
+
         self.main_splitter = QSplitter(self)
         self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.addWidget(left_panel)
+        self.main_splitter.addWidget(self.pages_pane_toggle_bar)
+        self.main_splitter.addWidget(right_panel)
         self.main_splitter.setCollapsible(0, True)
         self.main_splitter.setCollapsible(1, False)
-        self.main_splitter.addWidget(left_panel)
-        self.main_splitter.addWidget(right_panel)
+        self.main_splitter.setCollapsible(2, False)
         self.main_splitter.setStretchFactor(0, 0)
-        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setStretchFactor(1, 0)
+        self.main_splitter.setStretchFactor(2, 1)
+        main_sizes = self._splitter_sizes_or_default(
+            getattr(settings, "main_splitter_sizes", ()),
+            default=(PAGES_PANE_DEFAULT_WIDTH, 1000),
+        )
         self.main_splitter.setSizes(
-            self._splitter_sizes_or_default(
-                getattr(settings, "main_splitter_sizes", ()),
-                default=(PAGES_PANE_DEFAULT_WIDTH, 1000),
-            )
+            [main_sizes[0], PAGES_PANE_TOGGLE_WIDTH, main_sizes[1]]
         )
         self.main_splitter.splitterMoved.connect(self._on_workspace_splitter_moved)
         self._apply_workspace_layout(self._workspace_layout, persist=False)
@@ -568,15 +614,35 @@ class MainWindow(QMainWindow):
             return cleaned[:2]
         return list(default)
 
+    def _logical_main_splitter_sizes(self) -> tuple[int, int]:
+        sizes = tuple(self.main_splitter.sizes())
+        if len(sizes) >= 3:
+            return sizes[0], sizes[2]
+        if len(sizes) >= 2:
+            return sizes[0], sizes[1]
+        return self._last_pages_pane_width, 1000
+
+    def _logical_main_splitter_total(self) -> int:
+        pages_width, workspace_width = self._logical_main_splitter_sizes()
+        return pages_width + workspace_width
+
+    def _usable_main_splitter_total(self) -> int:
+        total = self._logical_main_splitter_total()
+        if total < PAGES_PANE_MIN_EXPANDED_WIDTH + WORKSPACE_MIN_WIDTH:
+            return PAGES_PANE_DEFAULT_WIDTH + 1000
+        return total
+
     def _initial_pages_pane_width(self, settings) -> int:
         sizes = self._splitter_sizes_or_default(
             getattr(settings, "main_splitter_sizes", ()),
             default=(PAGES_PANE_DEFAULT_WIDTH, 1000),
         )
-        # 250 and 320 were previous generated defaults. Nudge those upward, and
-        # clamp genuinely cramped saved widths so visible means usable.
-        if sizes[0] in {250, 320} or sizes[0] < PAGES_PANE_MIN_EXPANDED_WIDTH:
+        # 250 and 340 were previous generated defaults. Nudge those to the
+        # current default, and clamp genuinely cramped saved widths upward.
+        if sizes[0] in {250, 340}:
             return PAGES_PANE_DEFAULT_WIDTH
+        if sizes[0] < PAGES_PANE_MIN_EXPANDED_WIDTH:
+            return PAGES_PANE_MIN_EXPANDED_WIDTH
         return sizes[0]
 
     def _workspace_sizes_from_settings(self, layout: str) -> list[int]:
@@ -628,35 +694,64 @@ class MainWindow(QMainWindow):
                 if not self._pages_pane_visible:
                     self._pages_pane_visible = True
                     self.show_pages_pane_action.setChecked(True)
+                    self.pages_panel.setVisible(True)
+                    self._refresh_pages_pane_toggle()
+            elif self._pages_pane_visible:
+                self._pages_pane_visible = False
+                self.pages_panel.setVisible(False)
+                self.show_pages_pane_action.setChecked(False)
+                self._refresh_pages_pane_toggle()
         self._workspace_splitters_dirty = True
 
     def _set_pages_pane_visible(self, visible: bool) -> None:
         self._apply_pages_pane_visibility(visible, persist=True)
+
+    def _toggle_pages_pane_from_button(self) -> None:
+        self._set_pages_pane_visible(not self._pages_pane_visible)
+
+    def _refresh_pages_pane_toggle(self) -> None:
+        if not hasattr(self, "pages_pane_toggle_button"):
+            return
+        if self._pages_pane_visible:
+            self.pages_pane_toggle_button.setText("<")
+            self.pages_pane_toggle_button.setToolTip("Hide Pages pane")
+            self.pages_pane_toggle_button.setAccessibleName("Hide Pages pane")
+        else:
+            self.pages_pane_toggle_button.setText(">")
+            self.pages_pane_toggle_button.setToolTip("Show Pages pane")
+            self.pages_pane_toggle_button.setAccessibleName("Show Pages pane")
 
     def _apply_pages_pane_visibility(self, visible: bool, *, persist: bool) -> None:
         self._pages_pane_visible = bool(visible)
         self.show_pages_pane_action.setChecked(self._pages_pane_visible)
         if self._pages_pane_visible:
             self.pages_panel.setVisible(True)
-            current_sizes = self.main_splitter.sizes()
-            total = sum(current_sizes) or 1250
+            total = self._usable_main_splitter_total()
             pages_width = self._last_pages_pane_width or PAGES_PANE_DEFAULT_WIDTH
             pages_width = min(
                 max(PAGES_PANE_MIN_EXPANDED_WIDTH, pages_width),
                 max(PAGES_PANE_MIN_EXPANDED_WIDTH, total - WORKSPACE_MIN_WIDTH),
             )
             self.main_splitter.setSizes(
-                [pages_width, max(WORKSPACE_MIN_WIDTH, total - pages_width)]
+                [
+                    pages_width,
+                    PAGES_PANE_TOGGLE_WIDTH,
+                    max(WORKSPACE_MIN_WIDTH, total - pages_width),
+                ]
             )
         else:
-            current_sizes = self.main_splitter.sizes()
+            current_sizes = tuple(self.main_splitter.sizes())
             if current_sizes and current_sizes[0] > 0:
                 self._last_pages_pane_width = max(
                     PAGES_PANE_MIN_EXPANDED_WIDTH,
                     current_sizes[0],
                 )
-            self.main_splitter.setSizes([0, max(1, sum(current_sizes) or 1250)])
+            total = self._usable_main_splitter_total()
+            self.main_splitter.setSizes(
+                [0, PAGES_PANE_TOGGLE_WIDTH, max(1, total)]
+            )
             self.pages_panel.setVisible(False)
+        self._refresh_pages_pane_toggle()
         if persist:
             self._persist_workspace_layout()
 
@@ -665,12 +760,12 @@ class MainWindow(QMainWindow):
             return
         try:
             settings = load_app_settings()
-            current_main_sizes = tuple(self.main_splitter.sizes())
+            current_pages_width, current_workspace_width = self._logical_main_splitter_sizes()
             if self._pages_pane_visible:
-                total = sum(current_main_sizes) or 1250
+                total = self._usable_main_splitter_total()
                 pages_width = max(
                     PAGES_PANE_MIN_EXPANDED_WIDTH,
-                    current_main_sizes[0] if current_main_sizes else self._last_pages_pane_width,
+                    current_pages_width or self._last_pages_pane_width,
                 )
                 pages_width = min(
                     pages_width,
@@ -678,7 +773,7 @@ class MainWindow(QMainWindow):
                 )
                 main_sizes = (pages_width, max(WORKSPACE_MIN_WIDTH, total - pages_width))
             else:
-                total = sum(current_main_sizes) or 1250
+                total = self._usable_main_splitter_total()
                 pages_width = min(
                     max(PAGES_PANE_MIN_EXPANDED_WIDTH, self._last_pages_pane_width),
                     max(PAGES_PANE_MIN_EXPANDED_WIDTH, total - WORKSPACE_MIN_WIDTH),
