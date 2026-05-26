@@ -45,6 +45,11 @@ class SettingsDialog(QDialog):
             auto_open_last_work=self.auto_open_last_work_checkbox.isChecked(),
             path=self._settings.path,
             last_import_dir=self._settings.last_import_dir,
+            workspace_layout=self._settings.workspace_layout,
+            pages_pane_visible=self._settings.pages_pane_visible,
+            main_splitter_sizes=self._settings.main_splitter_sizes,
+            stacked_workspace_sizes=self._settings.stacked_workspace_sizes,
+            side_by_side_workspace_sizes=self._settings.side_by_side_workspace_sizes,
         )
 
     def accept(self) -> None:

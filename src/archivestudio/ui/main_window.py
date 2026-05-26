@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -105,6 +105,12 @@ from archivestudio.ui.workers.background_task_runner import BackgroundTaskRunner
 
 log = logging.getLogger(__name__)
 
+WORKSPACE_LAYOUT_STACKED = "stacked"
+WORKSPACE_LAYOUT_SIDE_BY_SIDE = "side_by_side"
+PAGES_PANE_DEFAULT_WIDTH = 340
+PAGES_PANE_MIN_EXPANDED_WIDTH = 240
+WORKSPACE_MIN_WIDTH = 240
+
 
 @dataclass(frozen=True)
 class PageRecord:
@@ -127,6 +133,10 @@ class MainWindow(QMainWindow):
         self._loading_editor = False
         self._task_is_running = False
         self._active_task_launch: TaskLaunch | None = None
+        self._workspace_layout = WORKSPACE_LAYOUT_STACKED
+        self._pages_pane_visible = True
+        self._last_pages_pane_width = PAGES_PANE_DEFAULT_WIDTH
+        self._workspace_splitters_dirty = False
         self._background_tasks = BackgroundTaskRunner(self)
         self._background_tasks.finished.connect(self._on_background_task_finished)
         self._background_tasks.failed.connect(self._on_background_task_failed)
@@ -153,6 +163,8 @@ class MainWindow(QMainWindow):
         if not self._maybe_resolve_unsaved_changes():
             event.ignore()
             return
+        if self._workspace_splitters_dirty:
+            self._persist_workspace_layout()
         self._close_project()
         super().closeEvent(event)
 
@@ -250,6 +262,25 @@ class MainWindow(QMainWindow):
         self.fit_image_action = QAction("Fit Image", self)
         self.fit_image_action.triggered.connect(self._fit_image)
 
+        self.show_pages_pane_action = QAction("Show Pages Pane", self)
+        self.show_pages_pane_action.setCheckable(True)
+        self.show_pages_pane_action.triggered.connect(self._set_pages_pane_visible)
+
+        self.stacked_layout_action = QAction("Stacked Layout", self)
+        self.stacked_layout_action.setCheckable(True)
+        self.stacked_layout_action.triggered.connect(
+            lambda: self._set_workspace_layout(WORKSPACE_LAYOUT_STACKED)
+        )
+        self.side_by_side_layout_action = QAction("Side-by-Side Layout", self)
+        self.side_by_side_layout_action.setCheckable(True)
+        self.side_by_side_layout_action.triggered.connect(
+            lambda: self._set_workspace_layout(WORKSPACE_LAYOUT_SIDE_BY_SIDE)
+        )
+        self.workspace_layout_action_group = QActionGroup(self)
+        self.workspace_layout_action_group.setExclusive(True)
+        self.workspace_layout_action_group.addAction(self.stacked_layout_action)
+        self.workspace_layout_action_group.addAction(self.side_by_side_layout_action)
+
         self.activity_log_action = QAction("Activity Log...", self)
         self.activity_log_action.triggered.connect(self._open_activity_log_dialog)
 
@@ -311,6 +342,11 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.zoom_in_action)
         view_menu.addAction(self.zoom_out_action)
         view_menu.addAction(self.fit_image_action)
+        view_menu.addSeparator()
+        view_menu.addAction(self.show_pages_pane_action)
+        layout_menu = view_menu.addMenu("Page Layout")
+        layout_menu.addAction(self.stacked_layout_action)
+        layout_menu.addAction(self.side_by_side_layout_action)
 
         tasks_menu = self.menuBar().addMenu("&Tasks")
         tasks_menu.addAction(self.transcribe_action)
@@ -349,6 +385,13 @@ class MainWindow(QMainWindow):
         self.addToolBar(task_toolbar)
 
     def _build_ui(self) -> None:
+        settings = load_app_settings()
+        self._workspace_layout = self._normalized_workspace_layout(
+            getattr(settings, "workspace_layout", WORKSPACE_LAYOUT_STACKED)
+        )
+        self._pages_pane_visible = bool(getattr(settings, "pages_pane_visible", True))
+        self._last_pages_pane_width = self._initial_pages_pane_width(settings)
+
         self.page_list = QListWidget(self)
         self.page_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.page_list.currentItemChanged.connect(self._on_page_item_changed)
@@ -383,25 +426,36 @@ class MainWindow(QMainWindow):
         self.text_editor.document().modificationChanged.connect(self._on_editor_modified_changed)
 
         left_panel = QWidget(self)
+        self.pages_panel = left_panel
+        left_panel.setMinimumWidth(PAGES_PANE_MIN_EXPANDED_WIDTH)
+        left_panel.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         page_header = QWidget(self)
-        page_header_layout = QHBoxLayout(page_header)
+        page_header_layout = QVBoxLayout(page_header)
         page_header_layout.setContentsMargins(0, 0, 0, 0)
+        page_header_layout.setSpacing(4)
         page_header_layout.addWidget(QLabel("Pages"))
-        page_header_layout.addStretch(1)
+        page_button_layout = QHBoxLayout()
+        page_button_layout.setContentsMargins(0, 0, 0, 0)
+        page_button_layout.setSpacing(4)
         self.move_page_up_button = QPushButton("Up", self)
+        self.move_page_up_button.setToolTip("Move selected page(s) up")
         self.move_page_up_button.clicked.connect(lambda: self._move_selected_pages("up"))
-        page_header_layout.addWidget(self.move_page_up_button)
+        page_button_layout.addWidget(self.move_page_up_button)
         self.move_page_down_button = QPushButton("Down", self)
+        self.move_page_down_button.setToolTip("Move selected page(s) down")
         self.move_page_down_button.clicked.connect(lambda: self._move_selected_pages("down"))
-        page_header_layout.addWidget(self.move_page_down_button)
-        self.rotate_pages_button = QPushButton("Rotate 90°", self)
+        page_button_layout.addWidget(self.move_page_down_button)
+        self.rotate_pages_button = QPushButton("Rotate", self)
+        self.rotate_pages_button.setToolTip("Rotate selected page(s) 90 degrees")
         self.rotate_pages_button.clicked.connect(self._rotate_selected_pages)
-        page_header_layout.addWidget(self.rotate_pages_button)
-        self.delete_page_button = QPushButton("Delete Page", self)
+        page_button_layout.addWidget(self.rotate_pages_button)
+        self.delete_page_button = QPushButton("Delete", self)
+        self.delete_page_button.setToolTip("Delete selected page(s)")
         self.delete_page_button.clicked.connect(self._delete_selected_page)
-        page_header_layout.addWidget(self.delete_page_button)
+        page_button_layout.addWidget(self.delete_page_button)
+        page_header_layout.addLayout(page_button_layout)
         left_layout.addWidget(page_header)
         left_layout.addWidget(self.page_list)
 
@@ -427,23 +481,41 @@ class MainWindow(QMainWindow):
         text_panel_layout.addWidget(self.text_editor, 1)
         text_panel_layout.addWidget(self.text_meta_label)
 
+        self.workspace_splitter = QSplitter(self)
+        self.workspace_splitter.setChildrenCollapsible(False)
+        self.workspace_splitter.addWidget(self.image_viewer)
+        self.workspace_splitter.addWidget(text_panel)
+        self.workspace_splitter.setStretchFactor(0, 1)
+        self.workspace_splitter.setStretchFactor(1, 1)
+        self.workspace_splitter.splitterMoved.connect(self._on_workspace_splitter_moved)
+
         right_panel = QWidget(self)
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(info_form)
-        right_layout.addWidget(self.image_viewer, 3)
-        right_layout.addWidget(text_panel, 2)
+        right_layout.addWidget(self.workspace_splitter, 1)
 
-        splitter = QSplitter(self)
-        splitter.addWidget(left_panel)
-        splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([250, 1000])
+        self.main_splitter = QSplitter(self)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setCollapsible(0, True)
+        self.main_splitter.setCollapsible(1, False)
+        self.main_splitter.addWidget(left_panel)
+        self.main_splitter.addWidget(right_panel)
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes(
+            self._splitter_sizes_or_default(
+                getattr(settings, "main_splitter_sizes", ()),
+                default=(PAGES_PANE_DEFAULT_WIDTH, 1000),
+            )
+        )
+        self.main_splitter.splitterMoved.connect(self._on_workspace_splitter_moved)
+        self._apply_workspace_layout(self._workspace_layout, persist=False)
+        self._apply_pages_pane_visibility(self._pages_pane_visible, persist=False)
 
         central = QWidget(self)
         central_layout = QVBoxLayout(central)
-        central_layout.addWidget(splitter)
+        central_layout.addWidget(self.main_splitter)
         self.setCentralWidget(central)
 
         status_bar = QStatusBar(self)
@@ -472,6 +544,167 @@ class MainWindow(QMainWindow):
         self.page_list.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self.image_viewer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._refresh_provider_status()
+
+    def _normalized_workspace_layout(self, value: str) -> str:
+        if value == WORKSPACE_LAYOUT_SIDE_BY_SIDE:
+            return WORKSPACE_LAYOUT_SIDE_BY_SIDE
+        return WORKSPACE_LAYOUT_STACKED
+
+    def _splitter_sizes_or_default(
+        self,
+        sizes: tuple[int, ...] | list[int],
+        *,
+        default: tuple[int, int],
+    ) -> list[int]:
+        cleaned: list[int] = []
+        for size in sizes:
+            try:
+                value = int(size)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                cleaned.append(value)
+        if len(cleaned) >= 2:
+            return cleaned[:2]
+        return list(default)
+
+    def _initial_pages_pane_width(self, settings) -> int:
+        sizes = self._splitter_sizes_or_default(
+            getattr(settings, "main_splitter_sizes", ()),
+            default=(PAGES_PANE_DEFAULT_WIDTH, 1000),
+        )
+        # 250 and 320 were previous generated defaults. Nudge those upward, and
+        # clamp genuinely cramped saved widths so visible means usable.
+        if sizes[0] in {250, 320} or sizes[0] < PAGES_PANE_MIN_EXPANDED_WIDTH:
+            return PAGES_PANE_DEFAULT_WIDTH
+        return sizes[0]
+
+    def _workspace_sizes_from_settings(self, layout: str) -> list[int]:
+        settings = load_app_settings()
+        if layout == WORKSPACE_LAYOUT_SIDE_BY_SIDE:
+            return self._splitter_sizes_or_default(
+                getattr(settings, "side_by_side_workspace_sizes", ()),
+                default=(700, 500),
+            )
+        return self._splitter_sizes_or_default(
+            getattr(settings, "stacked_workspace_sizes", ()),
+            default=(520, 320),
+        )
+
+    def _set_workspace_layout(self, layout: str) -> None:
+        layout = self._normalized_workspace_layout(layout)
+        if layout == self._workspace_layout:
+            self._persist_workspace_layout()
+            return
+        self._persist_workspace_layout()
+        self._apply_workspace_layout(layout, persist=True)
+
+    def _apply_workspace_layout(self, layout: str, *, persist: bool) -> None:
+        layout = self._normalized_workspace_layout(layout)
+        self._workspace_layout = layout
+        orientation = (
+            Qt.Orientation.Horizontal
+            if layout == WORKSPACE_LAYOUT_SIDE_BY_SIDE
+            else Qt.Orientation.Vertical
+        )
+        self.workspace_splitter.setOrientation(orientation)
+        self.workspace_splitter.setSizes(self._workspace_sizes_from_settings(layout))
+        self.workspace_splitter.setStretchFactor(0, 1)
+        self.workspace_splitter.setStretchFactor(1, 1)
+        self.stacked_layout_action.setChecked(layout == WORKSPACE_LAYOUT_STACKED)
+        self.side_by_side_layout_action.setChecked(layout == WORKSPACE_LAYOUT_SIDE_BY_SIDE)
+        self._workspace_splitters_dirty = False
+        if persist:
+            self._persist_workspace_layout()
+
+    def _on_workspace_splitter_moved(self, *_args: object) -> None:
+        if hasattr(self, "main_splitter") and self.main_splitter.sizes():
+            pages_width = self.main_splitter.sizes()[0]
+            if pages_width > 0:
+                self._last_pages_pane_width = max(
+                    PAGES_PANE_MIN_EXPANDED_WIDTH,
+                    pages_width,
+                )
+                if not self._pages_pane_visible:
+                    self._pages_pane_visible = True
+                    self.show_pages_pane_action.setChecked(True)
+        self._workspace_splitters_dirty = True
+
+    def _set_pages_pane_visible(self, visible: bool) -> None:
+        self._apply_pages_pane_visibility(visible, persist=True)
+
+    def _apply_pages_pane_visibility(self, visible: bool, *, persist: bool) -> None:
+        self._pages_pane_visible = bool(visible)
+        self.show_pages_pane_action.setChecked(self._pages_pane_visible)
+        if self._pages_pane_visible:
+            self.pages_panel.setVisible(True)
+            current_sizes = self.main_splitter.sizes()
+            total = sum(current_sizes) or 1250
+            pages_width = self._last_pages_pane_width or PAGES_PANE_DEFAULT_WIDTH
+            pages_width = min(
+                max(PAGES_PANE_MIN_EXPANDED_WIDTH, pages_width),
+                max(PAGES_PANE_MIN_EXPANDED_WIDTH, total - WORKSPACE_MIN_WIDTH),
+            )
+            self.main_splitter.setSizes(
+                [pages_width, max(WORKSPACE_MIN_WIDTH, total - pages_width)]
+            )
+        else:
+            current_sizes = self.main_splitter.sizes()
+            if current_sizes and current_sizes[0] > 0:
+                self._last_pages_pane_width = max(
+                    PAGES_PANE_MIN_EXPANDED_WIDTH,
+                    current_sizes[0],
+                )
+            self.main_splitter.setSizes([0, max(1, sum(current_sizes) or 1250)])
+            self.pages_panel.setVisible(False)
+        if persist:
+            self._persist_workspace_layout()
+
+    def _persist_workspace_layout(self) -> None:
+        if not hasattr(self, "main_splitter") or not hasattr(self, "workspace_splitter"):
+            return
+        try:
+            settings = load_app_settings()
+            current_main_sizes = tuple(self.main_splitter.sizes())
+            if self._pages_pane_visible:
+                total = sum(current_main_sizes) or 1250
+                pages_width = max(
+                    PAGES_PANE_MIN_EXPANDED_WIDTH,
+                    current_main_sizes[0] if current_main_sizes else self._last_pages_pane_width,
+                )
+                pages_width = min(
+                    pages_width,
+                    max(PAGES_PANE_MIN_EXPANDED_WIDTH, total - WORKSPACE_MIN_WIDTH),
+                )
+                main_sizes = (pages_width, max(WORKSPACE_MIN_WIDTH, total - pages_width))
+            else:
+                total = sum(current_main_sizes) or 1250
+                pages_width = min(
+                    max(PAGES_PANE_MIN_EXPANDED_WIDTH, self._last_pages_pane_width),
+                    max(PAGES_PANE_MIN_EXPANDED_WIDTH, total - WORKSPACE_MIN_WIDTH),
+                )
+                main_sizes = (pages_width, max(WORKSPACE_MIN_WIDTH, total - pages_width))
+            stacked_sizes = tuple(getattr(settings, "stacked_workspace_sizes", ()))
+            side_by_side_sizes = tuple(getattr(settings, "side_by_side_workspace_sizes", ()))
+            current_workspace_sizes = tuple(self.workspace_splitter.sizes())
+            if self._workspace_layout == WORKSPACE_LAYOUT_SIDE_BY_SIDE:
+                side_by_side_sizes = current_workspace_sizes
+            else:
+                stacked_sizes = current_workspace_sizes
+            save_app_settings(
+                replace(
+                    settings,
+                    workspace_layout=self._workspace_layout,
+                    pages_pane_visible=self._pages_pane_visible,
+                    main_splitter_sizes=main_sizes,
+                    stacked_workspace_sizes=stacked_sizes,
+                    side_by_side_workspace_sizes=side_by_side_sizes,
+                ),
+                store_credentials=False,
+            )
+            self._workspace_splitters_dirty = False
+        except Exception:
+            log.exception("Could not save workspace layout settings")
 
     def _refresh_window_state(self) -> None:
         has_project = self.project is not None

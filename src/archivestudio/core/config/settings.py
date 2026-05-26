@@ -42,6 +42,11 @@ strong_model = "gemini-2.5-pro"
 default_provider = "demo"
 auto_open_last_work = false
 last_import_dir = ""
+workspace_layout = "stacked"
+pages_pane_visible = true
+main_splitter_sizes = [340, 1000]
+stacked_workspace_sizes = [520, 320]
+side_by_side_workspace_sizes = [700, 500]
 """
 
 
@@ -69,6 +74,11 @@ class AppSettings:
     auto_open_last_work: bool
     path: Path
     last_import_dir: str = ""
+    workspace_layout: str = "stacked"
+    pages_pane_visible: bool = True
+    main_splitter_sizes: tuple[int, ...] = ()
+    stacked_workspace_sizes: tuple[int, ...] = ()
+    side_by_side_workspace_sizes: tuple[int, ...] = ()
 
 
 def ensure_user_settings_file() -> Path:
@@ -110,6 +120,13 @@ def load_app_settings() -> AppSettings:
         auto_open_last_work=bool(app.get("auto_open_last_work", False)),
         path=path,
         last_import_dir=str(app.get("last_import_dir", "")),
+        workspace_layout=_workspace_layout(str(app.get("workspace_layout", "stacked"))),
+        pages_pane_visible=bool(app.get("pages_pane_visible", True)),
+        main_splitter_sizes=_int_tuple(app.get("main_splitter_sizes", (340, 1000))),
+        stacked_workspace_sizes=_int_tuple(app.get("stacked_workspace_sizes", (520, 320))),
+        side_by_side_workspace_sizes=_int_tuple(
+            app.get("side_by_side_workspace_sizes", (700, 500))
+        ),
     )
 
 
@@ -191,6 +208,11 @@ def _render_settings_toml(settings: AppSettings) -> str:
         f'default_provider = "{_escape_toml_string(settings.default_provider)}"',
         f"auto_open_last_work = {_bool_literal(settings.auto_open_last_work)}",
         f'last_import_dir = "{_escape_toml_string(settings.last_import_dir)}"',
+        f'workspace_layout = "{_escape_toml_string(_workspace_layout(settings.workspace_layout))}"',
+        f"pages_pane_visible = {_bool_literal(settings.pages_pane_visible)}",
+        f"main_splitter_sizes = {_int_array_literal(settings.main_splitter_sizes)}",
+        f"stacked_workspace_sizes = {_int_array_literal(settings.stacked_workspace_sizes)}",
+        f"side_by_side_workspace_sizes = {_int_array_literal(settings.side_by_side_workspace_sizes)}",
         "",
     ]
     return "\n".join(sections)
@@ -208,6 +230,33 @@ def _provider_lines(settings: ProviderSettings) -> str:
 
 def _bool_literal(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _workspace_layout(value: str) -> str:
+    return "side_by_side" if value == "side_by_side" else "stacked"
+
+
+def _int_tuple(value: object) -> tuple[int, ...]:
+    if isinstance(value, str):
+        parts = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        parts = value
+    else:
+        return ()
+    numbers: list[int] = []
+    for part in parts:
+        try:
+            number = int(part)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            numbers.append(number)
+    return tuple(numbers)
+
+
+def _int_array_literal(values: tuple[int, ...]) -> str:
+    cleaned = [value for value in values if value > 0]
+    return "[" + ", ".join(str(value) for value in cleaned) + "]"
 
 
 def _escape_toml_string(value: str) -> str:

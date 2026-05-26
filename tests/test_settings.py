@@ -32,6 +32,11 @@ def test_save_and_load_app_settings_round_trip(tmp_path: Path, monkeypatch) -> N
         auto_open_last_work=True,
         path=settings_path,
         last_import_dir=str(tmp_path / "imports"),
+        workspace_layout="side_by_side",
+        pages_pane_visible=False,
+        main_splitter_sizes=(220, 1180),
+        stacked_workspace_sizes=(500, 350),
+        side_by_side_workspace_sizes=(760, 620),
     )
 
     save_path = save_app_settings(initial)
@@ -44,12 +49,20 @@ def test_save_and_load_app_settings_round_trip(tmp_path: Path, monkeypatch) -> N
     assert loaded.default_provider == "openai"
     assert loaded.auto_open_last_work is True
     assert loaded.last_import_dir == str(tmp_path / "imports")
+    assert loaded.workspace_layout == "side_by_side"
+    assert loaded.pages_pane_visible is False
+    assert loaded.main_splitter_sizes == (220, 1180)
+    assert loaded.stacked_workspace_sizes == (500, 350)
+    assert loaded.side_by_side_workspace_sizes == (760, 620)
     rendered = settings_path.read_text(encoding="utf-8")
     assert "sk-" not in rendered
     assert "google-key" not in rendered
     assert "api_key" not in rendered
     assert "custom_model" not in rendered
     assert 'last_import_dir = "' in rendered
+    assert 'workspace_layout = "side_by_side"' in rendered
+    assert "pages_pane_visible = false" in rendered
+    assert "main_splitter_sizes = [220, 1180]" in rendered
 
 
 def test_save_app_settings_is_atomic_on_replace_failure(tmp_path: Path, monkeypatch) -> None:
@@ -114,6 +127,8 @@ def test_load_app_settings_ignores_legacy_plaintext_api_key(tmp_path: Path, monk
 
     assert loaded.openai.enabled is True
     assert loaded.openai.api_key == ""
+    assert loaded.workspace_layout == "stacked"
+    assert loaded.pages_pane_visible is True
 
 
 def test_save_app_settings_can_skip_credential_storage(tmp_path: Path, monkeypatch) -> None:
