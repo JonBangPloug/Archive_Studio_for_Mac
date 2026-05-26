@@ -447,7 +447,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         status_bar = QStatusBar(self)
-        self.provider_status_label = QLabel("Task model: loading...")
+        self.provider_status_label = QLabel("App default model: loading...")
         self.provider_status_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -1123,7 +1123,11 @@ class MainWindow(QMainWindow):
         dialog = TaskPromptSettingsDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        self.statusBar().showMessage("Saved task prompt settings", 5000)
+        self._refresh_provider_status()
+        self.statusBar().showMessage(
+            "Saved task prompt settings. Preset model choices will be used at task launch.",
+            5000,
+        )
 
     def _open_activity_log_dialog(self) -> None:
         dialog = ActivityLogDialog(self)
@@ -1134,22 +1138,26 @@ class MainWindow(QMainWindow):
             settings = load_app_settings()
             selection = create_provider_from_settings(settings)
         except Exception:
-            self.provider_status_label.setText("Task model: unavailable")
+            self.provider_status_label.setText("App default model: unavailable")
+            self.provider_status_label.setToolTip(
+                "Could not resolve the app default model settings."
+            )
             return
 
         model_id = getattr(selection.provider, "model_id", "unknown")
         if selection.used_fallback and selection.message:
             self.provider_status_label.setText(
-                "Task model: not configured"
+                "App default model: not configured"
             )
             self.provider_status_label.setToolTip(selection.message)
             return
 
         self.provider_status_label.setText(
-            f"Task model: {selection.provider.provider_name}:{model_id}"
+            f"App default model: {selection.provider.provider_name}:{model_id}"
         )
         self.provider_status_label.setToolTip(
-            f"LLM used for tasks: {settings.default_provider}"
+            "This is the app default model from Settings > Model. "
+            "Prompt presets can override it; the status bar and log show the resolved model when a task starts."
         )
 
     def _export_records_dialog(self, export_format: str) -> None:
@@ -1340,6 +1348,22 @@ class MainWindow(QMainWindow):
         if provider is None:
             return
 
+        self._log_resolved_task_launch(
+            task_type=task_type,
+            preset=preset,
+            provider=provider,
+            scope_label=launch.scope_label,
+            pages_per_call=launch.pages_per_call,
+        )
+        self._set_running_provider_status(
+            f"Running model: {self._provider_model_label(provider)}",
+            tooltip=(
+                f"Task: {task_type}\n"
+                f"Preset: {preset.name}\n"
+                f"Resolved model: {self._provider_model_label(provider)}"
+            ),
+        )
+
         if task_type == TASK_TRANSCRIBE:
             runner = lambda token: run_transcription(
                 self.project,
@@ -1389,12 +1413,13 @@ class MainWindow(QMainWindow):
         self._start_two_step_transcribe_correction_workflow(
             workflow_name=HANDWRITTEN_HTR_CORRECTION_WORKFLOW,
             preset_name="Handwritten Transcription + Correction",
-            runner_factory=lambda provider, page_ids, transcription_preset, correction_preset, progress_callback, cancellation_token: run_handwritten_htr_and_correction(
+            runner_factory=lambda transcription_provider, correction_provider, page_ids, transcription_preset, correction_preset, progress_callback, cancellation_token: run_handwritten_htr_and_correction(
                 self.project,
-                provider,
+                transcription_provider,
                 page_ids=page_ids,
                 transcription_preset=transcription_preset,
                 correction_preset=correction_preset,
+                correction_provider=correction_provider,
                 progress_callback=progress_callback,
                 cancellation_token=cancellation_token,
             ),
@@ -1407,12 +1432,13 @@ class MainWindow(QMainWindow):
         self._start_two_step_transcribe_correction_workflow(
             workflow_name=PRINTED_OCR_CORRECTION_WORKFLOW,
             preset_name="Printed Transcription + Correction",
-            runner_factory=lambda provider, page_ids, transcription_preset, correction_preset, progress_callback, cancellation_token: run_printed_ocr_and_correction(
+            runner_factory=lambda transcription_provider, correction_provider, page_ids, transcription_preset, correction_preset, progress_callback, cancellation_token: run_printed_ocr_and_correction(
                 self.project,
-                provider,
+                transcription_provider,
                 page_ids=page_ids,
                 transcription_preset=transcription_preset,
                 correction_preset=correction_preset,
+                correction_provider=correction_provider,
                 progress_callback=progress_callback,
                 cancellation_token=cancellation_token,
             ),
@@ -1426,7 +1452,7 @@ class MainWindow(QMainWindow):
         *,
         workflow_name: str,
         preset_name: str,
-        runner_factory: Callable[[object, list[str] | None, object, object, object, object], object],
+        runner_factory: Callable[[object, object, list[str] | None, object, object, object, object], object],
         status_label: str,
         transcription_preset_name: str,
         correction_preset_name: str,
@@ -1472,9 +1498,41 @@ class MainWindow(QMainWindow):
                 ),
             )
 
-        provider = self._resolve_task_provider(transcription_preset.model_config)
-        if provider is None:
+        transcription_provider = self._resolve_task_provider(transcription_preset.model_config)
+        if transcription_provider is None:
             return
+        correction_provider = self._resolve_task_provider(correction_preset.model_config)
+        if correction_provider is None:
+            return
+
+        self._log_resolved_task_launch(
+            task_type=f"{workflow_name}:transcribe",
+            preset=transcription_preset,
+            provider=transcription_provider,
+            scope_label=scope.scope_label,
+            pages_per_call=pages_per_call,
+        )
+        self._log_resolved_task_launch(
+            task_type=f"{workflow_name}:correct",
+            preset=correction_preset,
+            provider=correction_provider,
+            scope_label=scope.scope_label,
+            pages_per_call=None,
+        )
+        workflow_model_label = self._workflow_model_label(
+            transcription_provider,
+            correction_provider,
+        )
+        self._set_running_provider_status(
+            f"Running models: {workflow_model_label}",
+            tooltip=(
+                f"Workflow: {preset_name}\n"
+                f"Transcription preset: {transcription_preset.name}\n"
+                f"Transcription model: {self._provider_model_label(transcription_provider)}\n"
+                f"Correction preset: {correction_preset.name}\n"
+                f"Correction model: {self._provider_model_label(correction_provider)}"
+            ),
+        )
 
         self._active_task_launch = TaskLaunch(
             task_type=workflow_name,
@@ -1486,7 +1544,8 @@ class MainWindow(QMainWindow):
             pages_per_call=pages_per_call,
         )
         runner = lambda token: runner_factory(
-            provider,
+            transcription_provider,
+            correction_provider,
             scope.page_ids,
             transcription_preset,
             correction_preset,
@@ -1499,7 +1558,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             (
                 f"Running {status_label} "
-                f"on {scope.scope_label} using {provider.provider_name}:{provider.model_id}"
+                f"on {scope.scope_label} using {workflow_model_label}"
                 f"{self._pages_per_call_status_suffix(self._active_task_launch)}..."
             ),
             0,
@@ -1548,6 +1607,47 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_error(title, exc)
             return None
+
+    def _provider_model_label(self, provider) -> str:
+        return f"{provider.provider_name}:{getattr(provider, 'model_id', 'unknown')}"
+
+    def _workflow_model_label(self, transcription_provider, correction_provider) -> str:
+        transcription_label = self._provider_model_label(transcription_provider)
+        correction_label = self._provider_model_label(correction_provider)
+        if transcription_label == correction_label:
+            return transcription_label
+        return f"transcribe {transcription_label}; correct {correction_label}"
+
+    def _set_running_provider_status(self, text: str, *, tooltip: str) -> None:
+        self.provider_status_label.setText(text)
+        self.provider_status_label.setToolTip(tooltip)
+
+    def _log_resolved_task_launch(
+        self,
+        *,
+        task_type: str,
+        preset,
+        provider,
+        scope_label: str,
+        pages_per_call: int | None,
+    ) -> None:
+        log.info(
+            (
+                "Starting task: task=%s preset=%r scope=%r provider=%s model=%s "
+                "preset_provider=%s preset_model_tier=%s preset_model_id=%s "
+                "temperature=%s pages_per_call=%s"
+            ),
+            task_type,
+            preset.name,
+            scope_label,
+            provider.provider_name,
+            getattr(provider, "model_id", "unknown"),
+            preset.model_config.provider,
+            preset.model_config.model_tier,
+            preset.model_config.model_id,
+            preset.model_config.temperature,
+            pages_per_call,
+        )
 
     def _resolve_task_provider(self, model_config=None):
         settings = load_app_settings()
@@ -1774,10 +1874,11 @@ class MainWindow(QMainWindow):
         }.get(task_type, "Task")
         text, ok = QInputDialog.getMultiLineText(
             self,
-            "Custom Instructions",
+            "Source Instructions for This Run",
             (
-                f"Enter custom instructions for {task_label}.\n"
-                "These instructions will be inserted into the prompt for this run."
+                f"Enter source instructions for this {task_label} run.\n"
+                "Describe the language, period, document type, layout, marginalia, "
+                "abbreviations, or other recurring source conventions."
             ),
         )
         if not ok:
@@ -1786,8 +1887,8 @@ class MainWindow(QMainWindow):
         if not cleaned:
             QMessageBox.warning(
                 self,
-                "Missing Custom Instructions",
-                "Please enter some instructions for the custom preset.",
+                "Missing Source Instructions",
+                "Please enter source instructions for the custom preset.",
             )
             return None
         return cleaned
@@ -1908,6 +2009,7 @@ class MainWindow(QMainWindow):
             self._busy_indicator.reset()
             self._busy_indicator.setRange(0, 0)
             self._task_progress_label.clear()
+            self._refresh_provider_status()
         else:
             self._busy_indicator.setRange(0, 0)
             self._busy_indicator.setValue(0)

@@ -387,7 +387,7 @@ def test_run_translation_falls_back_to_original_text(tmp_path: Path) -> None:
         project.close()
 
 
-def test_custom_transcription_preset_includes_custom_instructions_in_prompt(tmp_path: Path) -> None:
+def test_custom_transcription_preset_folds_custom_notes_into_source_notes(tmp_path: Path) -> None:
     project = create_project(tmp_path / "project", name="Custom Prompt")
     source_dir = tmp_path / "images"
     _build_source_images(source_dir, count=1)
@@ -396,6 +396,7 @@ def test_custom_transcription_preset_includes_custom_instructions_in_prompt(tmp_
     provider = FakeTranscriptionProvider()
     preset = replace(
         get_builtin_preset("Custom Transcription"),
+        structure_rules="Entries are in two columns; keep each numbered entry separate.",
         custom_instructions="Preserve page headers and render marginal notes in [MARGIN:] blocks.",
     )
 
@@ -404,8 +405,35 @@ def test_custom_transcription_preset_includes_custom_instructions_in_prompt(tmp_
 
         assert summary.status == TASK_STATUS_COMPLETED
         assert provider.last_transcription_prompts
+        assert "Entries are in two columns" in provider.last_transcription_prompts[0]
         assert "Preserve page headers" in provider.last_transcription_prompts[0]
-        assert "Additional user instructions" in provider.last_transcription_prompts[0]
+        assert "Source instructions:" in provider.last_transcription_prompts[0]
+        assert "Additional user instructions" not in provider.last_transcription_prompts[0]
+    finally:
+        project.close()
+
+
+def test_builtin_transcription_prompt_treats_sequence_as_internal_reference(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "project", name="Prompt Shape")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=1)
+    import_image_folder(project, source_dir, source_type="handwritten")
+
+    provider = FakeTranscriptionProvider()
+
+    try:
+        summary = run_transcription(
+            project,
+            provider,
+            replace(get_builtin_preset("Handwritten Transcription"), batch_size=1),
+        )
+
+        assert summary.status == TASK_STATUS_COMPLETED
+        assert provider.last_transcription_prompts
+        prompt = provider.last_transcription_prompts[0]
+        assert "Transcribe the page shown in the image." in prompt
+        assert "Internal app page sequence: 1." in prompt
+        assert "Transcribe page 1" not in prompt
     finally:
         project.close()
 

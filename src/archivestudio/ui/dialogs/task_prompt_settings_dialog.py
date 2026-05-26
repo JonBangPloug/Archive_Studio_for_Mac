@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QFormLayout,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -77,6 +76,7 @@ class TaskPromptSettingsDialog(QDialog):
         self._current_original_name: str | None = None
         self._current_is_builtin = True
         self._current_model_id = "unset"
+        self._current_source_genre = "custom source"
         self._loading_form = False
         self._loaded_form_state: tuple[object, ...] | None = None
 
@@ -94,8 +94,7 @@ class TaskPromptSettingsDialog(QDialog):
         layout = QVBoxLayout(self)
 
         intro = QLabel(
-            "Choose a preset, edit the prompt text, and save. "
-            "Built-in presets are safe defaults; your changes are saved as overrides."
+            "Edit what the model should do and what it should know about this source."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -107,7 +106,7 @@ class TaskPromptSettingsDialog(QDialog):
 
         content = QWidget(scroll_area)
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setContentsMargins(8, 8, 8, 8)
         content_layout.setSpacing(14)
         scroll_area.setWidget(content)
 
@@ -138,82 +137,66 @@ class TaskPromptSettingsDialog(QDialog):
         self.preset_help_label = QLabel("")
         self.preset_help_label.setWordWrap(True)
         preset_layout.addWidget(self.preset_help_label)
-        content_layout.addWidget(preset_box)
 
-        actions_box = QGroupBox("Manage Presets")
-        action_layout = QGridLayout(actions_box)
+        action_row = QWidget(preset_box)
+        action_layout = QHBoxLayout(action_row)
+        action_layout.setContentsMargins(0, 0, 0, 0)
         self.new_preset_button = QPushButton("New Preset...", self)
         self.new_preset_button.clicked.connect(self._new_blank_preset)
         self.delete_preset_button = QPushButton("Delete Preset", self)
         self.delete_preset_button.clicked.connect(self._delete_selected_preset)
         self.reset_preset_button = QPushButton("Reset Preset to Original", self)
         self.reset_preset_button.clicked.connect(self._reset_selected_preset)
-        action_buttons = [
-            self.new_preset_button,
-            self.delete_preset_button,
-            self.reset_preset_button,
-        ]
-        for index, button in enumerate(action_buttons):
-            row = index // 2
-            column = index % 2
-            action_layout.addWidget(button, row, column)
-        content_layout.addWidget(actions_box)
+        action_layout.addWidget(self.new_preset_button)
+        action_layout.addWidget(self.delete_preset_button)
+        action_layout.addWidget(self.reset_preset_button)
+        action_layout.addStretch(1)
+        preset_layout.addWidget(action_row)
+        content_layout.addWidget(preset_box)
 
-        editor_box = QGroupBox("Prompt Editor")
-        editor_layout = QVBoxLayout(editor_box)
-        editor_intro = QLabel(
-            "General instructions describe the overall job. "
-            "Detailed instructions are the concrete prompt template sent to the model. "
-            "For translation presets, change the output language by editing the detailed "
-            "instructions, for example: 'Translate from Latin to English.'"
-        )
-        editor_intro.setWordWrap(True)
-        editor_layout.addWidget(editor_intro)
-
+        task_box = QGroupBox("Task instruction")
+        task_layout = QVBoxLayout(task_box)
+        task_intro = QLabel("What the model should do for this task.")
+        task_intro.setWordWrap(True)
+        task_layout.addWidget(task_intro)
         self.general_instructions_edit = QPlainTextEdit(self)
-        self.general_instructions_edit.setMinimumHeight(170)
+        self.general_instructions_edit.setMinimumHeight(150)
         self.general_instructions_edit.setPlaceholderText(
-            "Describe the overall goal, accuracy rules, and what should be preserved."
+            "Example: Transcribe faithfully, preserve spelling and meaningful structure, and do not modernize."
         )
-        self.detailed_instructions_edit = QPlainTextEdit(self)
-        self.detailed_instructions_edit.setMinimumHeight(250)
-        self.detailed_instructions_edit.setPlaceholderText(
-            "Write the actual task prompt here. You can use placeholders listed below."
-        )
-        self.response_prefix_edit = QPlainTextEdit(self)
-        self.response_prefix_edit.setMaximumHeight(70)
-        self.response_prefix_edit.setPlaceholderText(
-            "Optional. Example: Corrected Transcript:"
-        )
+        task_layout.addWidget(self.general_instructions_edit)
+        content_layout.addWidget(task_box)
 
-        editor_layout.addWidget(QLabel("General instructions"))
-        editor_layout.addWidget(self.general_instructions_edit)
-        editor_layout.addWidget(QLabel("Detailed instructions"))
-        editor_layout.addWidget(self.detailed_instructions_edit)
-        prefix_label = QLabel("Remove this leading label from saved text")
-        prefix_label.setToolTip(
-            "If the model starts its reply with a label like 'Corrected Transcript:', "
-            "enter that label here and ArchiveStudio will remove it before saving the text."
+        source_box = QGroupBox("Source instructions")
+        source_layout = QVBoxLayout(source_box)
+        source_intro = QLabel(
+            "Describe this source and how it should be handled: language, period, document type, layout, headings, columns, entries, marginalia, abbreviations, page numbers, tables, or recurring conventions."
         )
-        editor_layout.addWidget(prefix_label)
-        editor_layout.addWidget(self.response_prefix_edit)
-        prefix_help = QLabel(
-            "Example: if the AI replies with 'Corrected Transcript: ...', enter "
-            "'Corrected Transcript:' here so only the actual text is saved."
+        source_intro.setWordWrap(True)
+        source_layout.addWidget(source_intro)
+        self.source_notes_edit = QPlainTextEdit(self)
+        self.source_notes_edit.setMinimumHeight(150)
+        self.source_notes_edit.setPlaceholderText(
+            "Example: Danish Lutheran parish register, 17th-18th century. "
+            "Two columns. Preserve numbered entries, page headings, marginal notes, "
+            "abbreviations, and uncertain readings."
         )
-        prefix_help.setWordWrap(True)
-        editor_layout.addWidget(prefix_help)
-        content_layout.addWidget(editor_box)
+        source_layout.addWidget(self.source_notes_edit)
 
-        placeholders_box = QGroupBox("Available Placeholders")
-        placeholders_layout = QVBoxLayout(placeholders_box)
-        help_text = QLabel(self._placeholder_help_html())
-        help_text.setWordWrap(True)
-        help_text.setTextFormat(Qt.TextFormat.RichText)
-        placeholders_layout.addWidget(help_text)
-        content_layout.addWidget(placeholders_box)
+        self.source_genre_edit = QLineEdit(self)
+        self.source_genre_edit.setVisible(False)
+        self.structure_rules_edit = self.source_notes_edit
+        self.custom_instructions_edit = QPlainTextEdit(self)
+        self.custom_instructions_edit.setVisible(False)
+        self.preserve_line_breaks_checkbox = QCheckBox("Preserve line breaks", self)
+        self.preserve_line_breaks_checkbox.setVisible(False)
+        self.preserve_marginalia_checkbox = QCheckBox("Preserve marginalia", self)
+        self.preserve_marginalia_checkbox.setVisible(False)
+        self.normalize_whitespace_checkbox = QCheckBox("Normalize whitespace", self)
+        self.normalize_whitespace_checkbox.setVisible(False)
+        content_layout.addWidget(source_box)
 
-        details_box = QGroupBox("Preset Details")
+        details_box = QGroupBox("Model")
         details_layout = QVBoxLayout(details_box)
         self.details_help_label = QLabel("")
         self.details_help_label.setWordWrap(True)
@@ -224,7 +207,6 @@ class TaskPromptSettingsDialog(QDialog):
         self.task_type_combo = QComboBox(self)
         for task_type, label in TASK_TYPE_LABELS.items():
             self.task_type_combo.addItem(label, userData=task_type)
-        self.source_genre_edit = QLineEdit(self)
         self.batch_size_spin = QSpinBox(self)
         self.batch_size_spin.setRange(1, 20)
         self.provider_combo = QComboBox(self)
@@ -243,12 +225,8 @@ class TaskPromptSettingsDialog(QDialog):
         )
         self.temperature_edit = QLineEdit(self)
         self.temperature_edit.setPlaceholderText("Blank = model default")
-        self.preserve_line_breaks_checkbox = QCheckBox("Preserve line breaks", self)
-        self.preserve_marginalia_checkbox = QCheckBox("Preserve marginalia", self)
-        self.normalize_whitespace_checkbox = QCheckBox("Normalize whitespace", self)
-        metadata_form.addRow("Preset name", self.name_edit)
-        metadata_form.addRow("Task type", self.task_type_combo)
-        metadata_form.addRow("Source genre", self.source_genre_edit)
+        self.name_edit.setVisible(False)
+        self.task_type_combo.setVisible(False)
         metadata_form.addRow("Batch size", self.batch_size_spin)
         metadata_form.addRow("Provider", self.provider_combo)
         metadata_form.addRow("Model tier", self.model_tier_combo)
@@ -263,22 +241,21 @@ class TaskPromptSettingsDialog(QDialog):
         temperature_hint.setWordWrap(True)
         details_layout.addWidget(temperature_hint)
 
-        options_row = QWidget(details_box)
-        options_layout = QHBoxLayout(options_row)
-        options_layout.setContentsMargins(0, 0, 0, 0)
-        options_layout.addWidget(self.preserve_line_breaks_checkbox)
-        options_layout.addWidget(self.preserve_marginalia_checkbox)
-        options_layout.addWidget(self.normalize_whitespace_checkbox)
-        options_layout.addStretch(1)
-        details_layout.addWidget(options_row)
         content_layout.addWidget(details_box)
         content_layout.addStretch(1)
+
+        # Internal prompt assembly fields. They stay hidden so existing preset
+        # storage remains compatible without exposing template mechanics.
+        self.detailed_instructions_edit = QPlainTextEdit(self)
+        self.detailed_instructions_edit.setVisible(False)
+        self.response_prefix_edit = QPlainTextEdit(self)
+        self.response_prefix_edit.setVisible(False)
 
         bottom_row = QWidget(self)
         bottom_layout = QHBoxLayout(bottom_row)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.addStretch(1)
-        self.save_button = QPushButton("Save Current", self)
+        self.save_button = QPushButton("Save Changes", self)
         self.save_button.clicked.connect(self._save_current)
         self.close_button = QPushButton("Close", self)
         self.close_button.clicked.connect(self.close)
@@ -286,23 +263,12 @@ class TaskPromptSettingsDialog(QDialog):
         bottom_layout.addWidget(self.close_button)
         layout.addWidget(bottom_row)
 
-    def _placeholder_help_html(self) -> str:
-        return (
-            "<b>Most useful</b><br>"
-            "<code>{text_to_process}</code> current source text for Correct and Translate<br>"
-            "<code>{source_text}</code> current source text<br><br>"
-            "<b>Context</b><br>"
-            "<code>{page_sequence}</code>, <code>{source_genre}</code>, "
-            "<code>{structure_rules}</code>, <code>{custom_instructions}</code><br>"
-            "<code>{source_stage}</code> is available in Translate<br><br>"
-            "<b>Translation language</b><br>"
-            "Change the language pair by editing the translation prompt text itself."
-        )
-
     def _connect_dirty_tracking(self) -> None:
         self.name_edit.textChanged.connect(self._on_form_changed)
         self.task_type_combo.currentIndexChanged.connect(self._on_form_changed)
         self.source_genre_edit.textChanged.connect(self._on_form_changed)
+        self.structure_rules_edit.textChanged.connect(self._on_form_changed)
+        self.custom_instructions_edit.textChanged.connect(self._on_form_changed)
         self.batch_size_spin.valueChanged.connect(self._on_form_changed)
         self.provider_combo.currentIndexChanged.connect(self._on_form_changed)
         self.provider_combo.currentIndexChanged.connect(self._refresh_resolved_model_label)
@@ -369,7 +335,10 @@ class TaskPromptSettingsDialog(QDialog):
 
         self.name_edit.setText(preset.name)
         self._set_task_type(preset.task_type)
+        self._current_source_genre = preset.source_genre
         self.source_genre_edit.setText(preset.source_genre)
+        self.source_notes_edit.setPlainText(self._source_notes_from_preset(preset))
+        self.custom_instructions_edit.setPlainText("")
         self.batch_size_spin.setValue(max(1, preset.batch_size))
         self._set_provider(preset.model_config.provider)
         self._set_model_tier(preset.model_config.model_tier)
@@ -390,30 +359,53 @@ class TaskPromptSettingsDialog(QDialog):
         self._loading_form = False
         self._set_form_dirty(False)
 
+    def _source_notes_from_preset(self, preset) -> str:
+        """Fold older source-specific fields into the single visible notes field."""
+        notes: list[str] = []
+        default_source_genres = {
+            "handwritten text",
+            "printed text",
+            "catalogue / structured listings",
+            "custom / other source",
+            "general historical text",
+            "custom source",
+        }
+        source_genre = preset.source_genre.strip()
+        if source_genre and source_genre not in default_source_genres:
+            notes.append(f"Source type: {source_genre}")
+        structure_rules = preset.structure_rules.strip()
+        if structure_rules:
+            notes.append(structure_rules)
+        custom_instructions = preset.custom_instructions.strip()
+        if custom_instructions:
+            notes.append(custom_instructions)
+        return "\n\n".join(notes)
+
     def _apply_editability_state(self) -> None:
         is_user = not self._current_is_builtin
         self.preset_type_label.setText("User preset" if is_user else "Built-in preset")
         if is_user:
             self.preset_help_label.setText(
-                "This is your own preset. You can edit both the prompt text and the preset details below."
+                "This is your own preset. Edit task instruction, source instructions, or model settings below."
             )
             self.details_help_label.setText(
-                "Preset details affect how this preset behaves at runtime."
+                "Model and runtime details affect how this preset behaves when a task runs."
             )
             self.save_button.setText("Save Changes")
         else:
             self.preset_help_label.setText(
-                "This is a built-in preset. You can edit the prompt text and runtime details below; "
+                "This is a built-in preset. You can edit task instruction, source instructions, and model settings below; "
                 "ArchiveStudio will save your changes as an override."
             )
             self.details_help_label.setText(
-                "Built-in preset names and task types stay fixed, but you can adjust source genre, "
-                "batch size, and the structure options."
+                "Built-in preset names and task types stay fixed, but you can adjust batch size and model settings."
             )
             self.save_button.setText("Save Changes")
         self.name_edit.setEnabled(is_user)
         self.task_type_combo.setEnabled(is_user)
         self.source_genre_edit.setEnabled(True)
+        self.structure_rules_edit.setEnabled(True)
+        self.custom_instructions_edit.setEnabled(True)
         self.batch_size_spin.setEnabled(True)
         self.preserve_line_breaks_checkbox.setEnabled(True)
         self.preserve_marginalia_checkbox.setEnabled(True)
@@ -453,6 +445,8 @@ class TaskPromptSettingsDialog(QDialog):
                 and stored.preserve_line_breaks == builtin.preserve_line_breaks
                 and stored.preserve_marginalia == builtin.preserve_marginalia
                 and stored.normalize_whitespace == builtin.normalize_whitespace
+                and stored.structure_rules == builtin.structure_rules
+                and stored.custom_instructions == builtin.custom_instructions
                 and stored.provider == builtin.model_config.provider
                 and stored.model_tier == builtin.model_config.model_tier
                 and stored.model_id == builtin.model_config.model_id
@@ -469,6 +463,8 @@ class TaskPromptSettingsDialog(QDialog):
                     preserve_line_breaks=stored.preserve_line_breaks,
                     preserve_marginalia=stored.preserve_marginalia,
                     normalize_whitespace=stored.normalize_whitespace,
+                    structure_rules=stored.structure_rules,
+                    custom_instructions=stored.custom_instructions,
                     provider=stored.provider,
                     model_tier=stored.model_tier,
                     model_id=stored.model_id,
@@ -493,18 +489,26 @@ class TaskPromptSettingsDialog(QDialog):
         system_prompt = self.general_instructions_edit.toPlainText().strip()
         user_prompt_template = self.detailed_instructions_edit.toPlainText().strip()
         response_prefix = self.response_prefix_edit.toPlainText().strip()
-        source_genre = self.source_genre_edit.text().strip()
+        source_genre = self.source_genre_edit.text().strip() or self._current_source_genre
+        source_notes = self.source_notes_edit.toPlainText().strip()
         task_type = str(self.task_type_combo.currentData())
 
         if not name:
             QMessageBox.warning(self, "Missing Preset Name", "Preset name is required.")
             return None
         if not system_prompt or not user_prompt_template:
-            QMessageBox.warning(
-                self,
-                "Missing Prompt Text",
-                "General instructions and detailed instructions must both be filled in.",
-            )
+            if not system_prompt:
+                QMessageBox.warning(
+                    self,
+                    "Missing Task Instruction",
+                    "Task instruction is required.",
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Missing Internal Template",
+                    "The internal prompt template is missing. Reset this preset to original or create a new preset.",
+                )
             return None
         if self._current_is_builtin and name != (self._current_original_name or name):
             QMessageBox.warning(
@@ -547,6 +551,8 @@ class TaskPromptSettingsDialog(QDialog):
             preserve_line_breaks=self.preserve_line_breaks_checkbox.isChecked(),
             preserve_marginalia=self.preserve_marginalia_checkbox.isChecked(),
             normalize_whitespace=self.normalize_whitespace_checkbox.isChecked(),
+            structure_rules=source_notes,
+            custom_instructions="",
             provider=str(self.provider_combo.currentData() or "configurable"),
             model_tier=str(self.model_tier_combo.currentData() or "strong"),
             model_id=self._current_model_id or "unset",
@@ -573,6 +579,8 @@ class TaskPromptSettingsDialog(QDialog):
             preserve_line_breaks=True,
             preserve_marginalia=False,
             normalize_whitespace=False,
+            structure_rules="",
+            custom_instructions="",
             provider="configurable",
             model_tier="strong",
             model_id="unset",
@@ -588,9 +596,10 @@ class TaskPromptSettingsDialog(QDialog):
             return (
                 system_prompt,
                 (
-                    "Transcribe page {page_sequence}.\n"
-                    "Source genre: {source_genre}.\n\n"
-                    "Structure rules:\n{structure_rules}\n\n"
+                    "Transcribe the page shown in the image.\n"
+                    "Internal app page sequence: {page_sequence}.\n"
+                    "\n"
+                    "Source instructions:\n{structure_rules}\n\n"
                     "Return only the transcription."
                 ),
             )
@@ -599,8 +608,8 @@ class TaskPromptSettingsDialog(QDialog):
                 system_prompt,
                 (
                     "Correct page {page_sequence}.\n"
-                    "Source genre: {source_genre}.\n\n"
-                    "Structure rules:\n{structure_rules}\n\n"
+                    "\n"
+                    "Source instructions:\n{structure_rules}\n\n"
                     "Source text:\n{source_text}\n\n"
                     "Return only the corrected text."
                 ),
@@ -609,10 +618,10 @@ class TaskPromptSettingsDialog(QDialog):
             system_prompt,
             (
                 "Translate page {page_sequence}.\n"
-                "Source genre: {source_genre}.\n"
                 "Input stage: {source_stage}.\n"
                 "Translate from [source language] to [target language].\n"
-                "Preserve names, dates, uncertain readings, and meaningful structure.\n\n"
+                "\n"
+                "Source instructions:\n{structure_rules}\n\n"
                 "Source text:\n{source_text}\n\n"
                 "Return only the translation."
             ),
@@ -806,6 +815,7 @@ class TaskPromptSettingsDialog(QDialog):
             self.name_edit.text(),
             self.task_type_combo.currentData(),
             self.source_genre_edit.text(),
+            self.source_notes_edit.toPlainText(),
             self.batch_size_spin.value(),
             self.provider_combo.currentData(),
             self.model_tier_combo.currentData(),

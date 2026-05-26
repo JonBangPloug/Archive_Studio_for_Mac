@@ -23,6 +23,8 @@ class PresetOverride:
     preserve_line_breaks: bool | None = None
     preserve_marginalia: bool | None = None
     normalize_whitespace: bool | None = None
+    structure_rules: str | None = None
+    custom_instructions: str | None = None
     provider: str | None = None
     model_tier: str | None = None
     model_id: str | None = None
@@ -77,6 +79,16 @@ def load_preset_overrides() -> dict[str, PresetOverride]:
             normalize_whitespace=(
                 bool(payload.get("normalize_whitespace"))
                 if payload.get("normalize_whitespace") is not None
+                else None
+            ),
+            structure_rules=(
+                str(payload.get("structure_rules", ""))
+                if payload.get("structure_rules") is not None
+                else None
+            ),
+            custom_instructions=(
+                str(payload.get("custom_instructions", ""))
+                if payload.get("custom_instructions") is not None
                 else None
             ),
             provider=(

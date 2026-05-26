@@ -45,6 +45,7 @@ def run_handwritten_htr_and_correction(
     page_sequences: Sequence[int] | None = None,
     transcription_preset: TaskPreset | None = None,
     correction_preset: TaskPreset | None = None,
+    correction_provider: AIProvider | None = None,
     progress_callback: ProgressCallback | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> WorkflowRunSummary:
@@ -59,6 +60,7 @@ def run_handwritten_htr_and_correction(
         page_sequences=page_sequences,
         transcription_preset=transcription_preset,
         correction_preset=correction_preset,
+        correction_provider=correction_provider,
         progress_callback=progress_callback,
         cancellation_token=cancellation_token,
     )
@@ -72,6 +74,7 @@ def run_printed_ocr_and_correction(
     page_sequences: Sequence[int] | None = None,
     transcription_preset: TaskPreset | None = None,
     correction_preset: TaskPreset | None = None,
+    correction_provider: AIProvider | None = None,
     progress_callback: ProgressCallback | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> WorkflowRunSummary:
@@ -86,6 +89,7 @@ def run_printed_ocr_and_correction(
         page_sequences=page_sequences,
         transcription_preset=transcription_preset,
         correction_preset=correction_preset,
+        correction_provider=correction_provider,
         progress_callback=progress_callback,
         cancellation_token=cancellation_token,
     )
@@ -102,6 +106,7 @@ def _run_transcribe_and_correct_workflow(
     page_sequences: Sequence[int] | None = None,
     transcription_preset: TaskPreset | None = None,
     correction_preset: TaskPreset | None = None,
+    correction_provider: AIProvider | None = None,
     progress_callback: ProgressCallback | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> WorkflowRunSummary:
@@ -167,9 +172,10 @@ def _run_transcribe_and_correct_workflow(
         )
 
     resolved_correction_preset = correction_preset or get_preset(correction_preset_name)
+    resolved_correction_provider = correction_provider or provider
     correction_summary = run_correction(
         project,
-        provider,
+        resolved_correction_provider,
         resolved_correction_preset,
         page_ids=corrected_page_ids,
         progress_callback=progress_callback,

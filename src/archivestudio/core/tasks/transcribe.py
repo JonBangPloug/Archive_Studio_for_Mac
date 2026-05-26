@@ -322,20 +322,31 @@ def _emit_task_progress(
 
 
 def _render_prompt(page: _TargetPage, preset: TaskPreset) -> PromptMessages:
-    structure_rules = [
-        "- Preserve line breaks." if preset.preserve_line_breaks else "- Normalize line breaks when needed for readability.",
-        "- Preserve marginalia explicitly." if preset.preserve_marginalia else "- Ignore decorative marginal marks unless they carry content.",
-        "- Preserve original spacing and layout cues." if not preset.normalize_whitespace else "- Normalize repeated whitespace while preserving section structure.",
-    ]
+    structure_rules = _structure_rules_for_preset(preset)
     custom_instructions = preset.custom_instructions.strip() or "None."
     user = preset.prompt_template.user_prompt_template.format(
         page_sequence=page.sequence,
         source_genre=preset.source_genre,
-        structure_rules="\n".join(structure_rules),
+        structure_rules=structure_rules,
         custom_instructions=custom_instructions,
         text_to_process="",
     )
     return PromptMessages(system=preset.prompt_template.system_prompt, user=user)
+
+
+def _structure_rules_for_preset(preset: TaskPreset) -> str:
+    rules = [
+        "- Preserve line breaks." if preset.preserve_line_breaks else "- Normalize line breaks when needed for readability.",
+        "- Preserve marginalia explicitly." if preset.preserve_marginalia else "- Ignore decorative marginal marks unless they carry content.",
+        "- Preserve original spacing and layout cues." if not preset.normalize_whitespace else "- Normalize repeated whitespace while preserving section structure.",
+    ]
+    extra_rules = preset.structure_rules.strip()
+    if extra_rules:
+        rules.append(extra_rules)
+    custom_notes = preset.custom_instructions.strip()
+    if custom_notes:
+        rules.append(custom_notes)
+    return "\n".join(rules)
 
 
 def _normalize_response_text(text: str, response_prefix: str) -> str:

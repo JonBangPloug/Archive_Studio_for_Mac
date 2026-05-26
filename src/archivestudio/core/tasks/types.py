@@ -58,6 +58,7 @@ class TaskPreset:
     preserve_line_breaks: bool = True
     preserve_marginalia: bool = False
     normalize_whitespace: bool = False
+    structure_rules: str = ""
     custom_instructions: str = ""
     response_prefix: str = ""
     source_language: str = "auto-detect"

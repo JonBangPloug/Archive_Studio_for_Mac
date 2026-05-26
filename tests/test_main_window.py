@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from archivestudio.ui.main_window import PageRecord
 from archivestudio.ui.main_window import MainWindow
 
@@ -54,3 +56,26 @@ def test_selected_pages_scope_label_is_short_for_many_pages(qtbot) -> None:
     ]
 
     assert window._selected_pages_scope_label(records) == "19 selected pages"
+
+
+def test_provider_status_label_describes_app_default_not_task_model(monkeypatch, qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    provider = SimpleNamespace(provider_name="google", model_id="gemini-test")
+    selection = SimpleNamespace(
+        provider=provider,
+        used_fallback=False,
+        message=None,
+    )
+    settings = SimpleNamespace(default_provider="google")
+    monkeypatch.setattr("archivestudio.ui.main_window.load_app_settings", lambda: settings)
+    monkeypatch.setattr(
+        "archivestudio.ui.main_window.create_provider_from_settings",
+        lambda _settings: selection,
+    )
+
+    window._refresh_provider_status()
+
+    assert window.provider_status_label.text() == "App default model: google:gemini-test"
+    assert "Prompt presets can override" in window.provider_status_label.toolTip()

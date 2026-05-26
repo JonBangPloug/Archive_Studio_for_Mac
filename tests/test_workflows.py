@@ -203,3 +203,37 @@ def test_combined_workflow_uses_passed_transcription_preset_batching(tmp_path: P
         assert provider.batch_sequences == [[1, 2], [3, 4]]
     finally:
         project.close()
+
+
+def test_combined_workflow_uses_separate_correction_provider(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "project-separate-provider", name="Workflow Providers")
+    source_dir = tmp_path / "images-separate-provider"
+    source_dir.mkdir()
+    Image.new("RGB", (50, 40), color="red").save(source_dir / "page1.png")
+    import_image_folder(project, source_dir, source_type="printed")
+
+    transcription_provider = FakeWorkflowProvider()
+    correction_provider = FakeWorkflowProvider()
+    transcription_provider.model_id = "transcription-model"
+    correction_provider.model_id = "correction-model"
+
+    try:
+        summary = run_printed_ocr_and_correction(
+            project,
+            transcription_provider,
+            correction_provider=correction_provider,
+        )
+
+        assert summary.pages_completed == 1
+        assert transcription_provider.batch_sequences == [[1]]
+        assert transcription_provider.correction_sequences == []
+        assert correction_provider.correction_sequences == [1]
+
+        with project.session() as session:
+            corrected = session.execute(
+                select(TextVersion).where(TextVersion.stage == STAGE_CORRECTED)
+            ).scalar_one()
+
+        assert corrected.created_by == "ai:fake:correction-model"
+    finally:
+        project.close()

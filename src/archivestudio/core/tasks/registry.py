@@ -70,10 +70,10 @@ _HANDWRITTEN_PROMPT = PromptTemplate(
         "reading conservative."
     ),
     user_prompt_template=(
-        "Transcribe page {page_sequence}.\n"
-        "Source genre: {source_genre}.\n"
+        "Transcribe the page shown in the image.\n"
+        "Internal app page sequence: {page_sequence}.\n"
         "\n"
-        "Structure rules:\n"
+        "Source instructions:\n"
         "{structure_rules}\n"
         "\n"
         "Return only the transcription."
@@ -89,10 +89,10 @@ _PRINTED_PROMPT = PromptTemplate(
         "instructed."
     ),
     user_prompt_template=(
-        "Transcribe page {page_sequence}.\n"
-        "Source genre: {source_genre}.\n"
+        "Transcribe the page shown in the image.\n"
+        "Internal app page sequence: {page_sequence}.\n"
         "\n"
-        "Structure rules:\n"
+        "Source instructions:\n"
         "{structure_rules}\n"
         "\n"
         "Return only the transcription."
@@ -107,10 +107,10 @@ _CATALOGUE_PROMPT = PromptTemplate(
         "collapse entries into prose or invent missing structure."
     ),
     user_prompt_template=(
-        "Transcribe page {page_sequence}.\n"
-        "Source genre: {source_genre}.\n"
+        "Transcribe the page shown in the image.\n"
+        "Internal app page sequence: {page_sequence}.\n"
         "\n"
-        "Structure rules:\n"
+        "Source instructions:\n"
         "{structure_rules}\n"
         "\n"
         "Return only the transcription."
@@ -121,19 +121,16 @@ _CUSTOM_TRANSCRIPTION_PROMPT = PromptTemplate(
     name="custom_transcription",
     system_prompt=(
         "You are transcribing historical source material from an image. Preserve "
-        "historically meaningful wording and structure, and follow the additional "
-        "user instructions closely. Do not add information that is not supported "
+        "historically meaningful wording and structure, and follow the source "
+        "instructions closely. Do not add information that is not supported "
         "by the source."
     ),
     user_prompt_template=(
-        "Transcribe page {page_sequence}.\n"
-        "Source genre: {source_genre}.\n"
+        "Transcribe the page shown in the image.\n"
+        "Internal app page sequence: {page_sequence}.\n"
         "\n"
-        "Structure rules:\n"
+        "Source instructions:\n"
         "{structure_rules}\n"
-        "\n"
-        "Additional user instructions:\n"
-        "{custom_instructions}\n"
         "\n"
         "Return only the transcription."
     ),
@@ -149,9 +146,8 @@ _HANDWRITTEN_CORRECTION_PROMPT = PromptTemplate(
     ),
     user_prompt_template=(
         "Correct the existing transcription for page {page_sequence}.\n"
-        "Source genre: {source_genre}.\n"
         "\n"
-        "Structure rules:\n"
+        "Source instructions:\n"
         "{structure_rules}\n"
         "\n"
         "Existing transcription:\n"
@@ -171,9 +167,8 @@ _PRINTED_CORRECTION_PROMPT = PromptTemplate(
     ),
     user_prompt_template=(
         "Correct the existing transcription for page {page_sequence}.\n"
-        "Source genre: {source_genre}.\n"
         "\n"
-        "Structure rules:\n"
+        "Source instructions:\n"
         "{structure_rules}\n"
         "\n"
         "Existing transcription:\n"
@@ -192,9 +187,8 @@ _CATALOGUE_CORRECTION_PROMPT = PromptTemplate(
     ),
     user_prompt_template=(
         "Correct the existing transcription for page {page_sequence}.\n"
-        "Source genre: {source_genre}.\n"
         "\n"
-        "Structure rules:\n"
+        "Source instructions:\n"
         "{structure_rules}\n"
         "\n"
         "Existing transcription:\n"
@@ -208,19 +202,15 @@ _CUSTOM_CORRECTION_PROMPT = PromptTemplate(
     name="custom_correction",
     system_prompt=(
         "You are correcting an existing transcription against the page image. Follow "
-        "the additional user instructions closely while preserving historically "
+        "the source instructions closely while preserving historically "
         "meaningful wording and structure. Make only corrections supported by the "
         "image."
     ),
     user_prompt_template=(
         "Correct the existing transcription for page {page_sequence}.\n"
-        "Source genre: {source_genre}.\n"
         "\n"
-        "Structure rules:\n"
+        "Source instructions:\n"
         "{structure_rules}\n"
-        "\n"
-        "Additional user instructions:\n"
-        "{custom_instructions}\n"
         "\n"
         "Existing transcription:\n"
         "{source_text}\n"
@@ -239,7 +229,6 @@ _SCHOLARLY_TRANSLATION_PROMPT = PromptTemplate(
     ),
     user_prompt_template=(
         "Translate page {page_sequence}.\n"
-        "Source genre: {source_genre}.\n"
         "Input stage: {source_stage}.\n"
         "\n"
         "Translate from the source language to English.\n"
@@ -247,6 +236,9 @@ _SCHOLARLY_TRANSLATION_PROMPT = PromptTemplate(
         "readings, marginalia markers, and paragraph structure. Translate meaning "
         "rather than word order, but do not modernize technical or historically "
         "significant terms unnecessarily.\n"
+        "\n"
+        "Source instructions:\n"
+        "{structure_rules}\n"
         "\n"
         "Source text:\n"
         "{source_text}\n"
@@ -415,6 +407,16 @@ def get_preset(name: str) -> TaskPreset:
             if override.normalize_whitespace is not None
             else preset.normalize_whitespace
         ),
+        structure_rules=(
+            override.structure_rules
+            if override.structure_rules is not None
+            else preset.structure_rules
+        ),
+        custom_instructions=(
+            override.custom_instructions
+            if override.custom_instructions is not None
+            else preset.custom_instructions
+        ),
         model_config=replace(
             preset.model_config,
             provider=override.provider or preset.model_config.provider,
@@ -471,6 +473,16 @@ def list_presets() -> list[TaskPreset]:
                     override.normalize_whitespace
                     if override.normalize_whitespace is not None
                     else preset.normalize_whitespace
+                ),
+                structure_rules=(
+                    override.structure_rules
+                    if override.structure_rules is not None
+                    else preset.structure_rules
+                ),
+                custom_instructions=(
+                    override.custom_instructions
+                    if override.custom_instructions is not None
+                    else preset.custom_instructions
                 ),
                 model_config=replace(
                     preset.model_config,

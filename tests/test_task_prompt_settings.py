@@ -263,10 +263,18 @@ def test_prompt_dialog_builtin_details_can_be_saved_as_override(monkeypatch, qtb
     dialog.preset_combo.setCurrentIndex(index)
 
     assert dialog.batch_size_spin.isEnabled() is True
-    assert dialog.source_genre_edit.isEnabled() is True
+    assert dialog.general_instructions_edit.isEnabled() is True
+    assert dialog.source_notes_edit.isEnabled() is True
 
     dialog.batch_size_spin.setValue(4)
-    dialog.source_genre_edit.setText("Latin manuscript")
+    task_instruction = "Correct Latin manuscript text conservatively against the image."
+    dialog.general_instructions_edit.setPlainText(task_instruction)
+    source_notes = (
+        "Latin manuscript.\n"
+        "Two columns; preserve rubric headings.\n"
+        "Mark uncertain expansions with [?]."
+    )
+    dialog.source_notes_edit.setPlainText(source_notes)
     dialog.preserve_line_breaks_checkbox.setChecked(False)
     dialog.model_tier_combo.setCurrentIndex(dialog.model_tier_combo.findData("fast"))
     dialog.temperature_edit.setText("0.2")
@@ -275,7 +283,9 @@ def test_prompt_dialog_builtin_details_can_be_saved_as_override(monkeypatch, qtb
 
     saved = load_preset_overrides()["Handwritten Transcription"]
     assert saved.batch_size == 4
-    assert saved.source_genre == "Latin manuscript"
+    assert saved.system_prompt == task_instruction
+    assert saved.structure_rules == source_notes
+    assert saved.custom_instructions == ""
     assert saved.preserve_line_breaks is False
     assert saved.model_tier == "fast"
     assert saved.temperature == 0.2
@@ -292,6 +302,17 @@ def test_prompt_dialog_exposes_only_fast_and_strong_model_tiers(qtbot) -> None:
 
     assert tiers == {"fast", "strong"}
     assert not hasattr(dialog, "concrete_model_edit")
+
+
+def test_prompt_dialog_exposes_only_user_facing_prompt_fields(qtbot) -> None:
+    dialog = TaskPromptSettingsDialog()
+    qtbot.addWidget(dialog)
+
+    assert not hasattr(dialog, "prompt_tabs")
+    assert dialog.general_instructions_edit.isHidden() is False
+    assert dialog.source_notes_edit.isHidden() is False
+    assert dialog.detailed_instructions_edit.isHidden() is True
+    assert dialog.response_prefix_edit.isHidden() is True
 
 
 def test_prompt_dialog_rejects_unknown_placeholder(monkeypatch, qtbot) -> None:

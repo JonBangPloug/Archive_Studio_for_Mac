@@ -325,9 +325,13 @@ def _render_prompt(page: _TranslationTargetPage, preset: TaskPreset) -> PromptMe
     custom_instructions = preset.custom_instructions.strip()
     if custom_instructions:
         translation_rules = f"{translation_rules}\n{custom_instructions}"
+    source_notes = preset.structure_rules.strip()
+    if custom_instructions:
+        source_notes = f"{source_notes}\n{custom_instructions}".strip()
     user = preset.prompt_template.user_prompt_template.format(
         page_sequence=page.sequence,
         source_genre=preset.source_genre,
+        structure_rules=source_notes or "None.",
         source_stage=page.source_text_stage,
         source_language=preset.source_language,
         target_language=preset.target_language,

@@ -26,6 +26,8 @@ class StoredPreset:
     preserve_line_breaks: bool = True
     preserve_marginalia: bool = False
     normalize_whitespace: bool = False
+    structure_rules: str = ""
+    custom_instructions: str = ""
     provider: str = "configurable"
     model_tier: str = "strong"
     model_id: str = "unset"
@@ -55,6 +57,8 @@ class StoredPreset:
             preserve_line_breaks=self.preserve_line_breaks,
             preserve_marginalia=self.preserve_marginalia,
             normalize_whitespace=self.normalize_whitespace,
+            structure_rules=self.structure_rules,
+            custom_instructions=self.custom_instructions,
             response_prefix=self.response_prefix,
             source_language=self.source_language,
             target_language=self.target_language,
@@ -74,6 +78,8 @@ class StoredPreset:
             preserve_line_breaks=preset.preserve_line_breaks,
             preserve_marginalia=preset.preserve_marginalia,
             normalize_whitespace=preset.normalize_whitespace,
+            structure_rules=preset.structure_rules,
+            custom_instructions=preset.custom_instructions,
             provider=preset.model_config.provider,
             model_tier=preset.model_config.model_tier,
             model_id=preset.model_config.model_id,
@@ -118,6 +124,8 @@ def load_user_presets() -> dict[str, StoredPreset]:
             preserve_line_breaks=bool(payload.get("preserve_line_breaks", True)),
             preserve_marginalia=bool(payload.get("preserve_marginalia", False)),
             normalize_whitespace=bool(payload.get("normalize_whitespace", False)),
+            structure_rules=str(payload.get("structure_rules", "")),
+            custom_instructions=str(payload.get("custom_instructions", "")),
             provider=str(payload.get("provider", "configurable")).strip() or "configurable",
             model_tier=str(payload.get("model_tier", "strong")).strip() or "strong",
             model_id=str(payload.get("model_id", "unset")).strip() or "unset",
@@ -166,6 +174,8 @@ def import_user_presets(import_path: Path) -> dict[str, StoredPreset]:
             preserve_line_breaks=bool(payload.get("preserve_line_breaks", True)),
             preserve_marginalia=bool(payload.get("preserve_marginalia", False)),
             normalize_whitespace=bool(payload.get("normalize_whitespace", False)),
+            structure_rules=str(payload.get("structure_rules", "")),
+            custom_instructions=str(payload.get("custom_instructions", "")),
             provider=str(payload.get("provider", "configurable")).strip() or "configurable",
             model_tier=str(payload.get("model_tier", "strong")).strip() or "strong",
             model_id=str(payload.get("model_id", "unset")).strip() or "unset",
@@ -239,7 +249,7 @@ def list_preset_templates() -> list[PresetTemplate]:
                 user_prompt_template=(
                     "Transcribe this manuscript page.\n"
                     "Preserve page numbers, line structure where useful, and insert marginalia inline.\n"
-                    "Structure rules:\n{structure_rules}\n"
+                    "Source instructions:\n{structure_rules}\n"
                     "Return only the transcription."
                 ),
                 batch_size=1,

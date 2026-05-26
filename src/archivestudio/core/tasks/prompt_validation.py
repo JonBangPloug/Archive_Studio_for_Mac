@@ -38,6 +38,7 @@ _ALLOWED_PLACEHOLDERS = {
         "source_language",
         "source_stage",
         "source_text",
+        "structure_rules",
         "target_language",
         "text_to_process",
         "translation_rules",
