@@ -1,7 +1,7 @@
 # Archive Studio for Mac
 <img width="100" height="100" alt="Archive Studio for Mac 1 0 Logo" src="https://github.com/user-attachments/assets/109898bc-c304-4154-94ee-e3a8c73c2fea" />
 
-# Archive Studio for Mac 1.0
+# Archive Studio for Mac 1.1
 
 **Archive Studio for Mac** is a community macOS adaptation inspired by the original **Archive Studio** project developed by **Mark Humphries** and **Lianne C. Leddy**.
 
