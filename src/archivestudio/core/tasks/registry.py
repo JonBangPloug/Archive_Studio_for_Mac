@@ -10,6 +10,7 @@ from archivestudio.core.tasks.types import (
     TASK_CORRECT,
     TASK_TRANSLATE,
     TASK_TRANSCRIBE,
+    TASK_VERIFY,
     ModelConfig,
     PromptTemplate,
     TaskDefinition,
@@ -48,6 +49,17 @@ _TRANSLATION_DEFINITION = TaskDefinition(
         "translated stage while preserving scholarly provenance."
     ),
     output_stage=STAGE_TRANSLATED,
+    supports_batching=True,
+)
+
+_VERIFICATION_DEFINITION = TaskDefinition(
+    task_type=TASK_VERIFY,
+    display_name="Verify Transcription",
+    description=(
+        "Independently transcribe page images and flag disagreements with "
+        "the selected transcription for human review."
+    ),
+    output_stage="verification",
     supports_batching=True,
 )
 
@@ -247,6 +259,24 @@ _SCHOLARLY_TRANSLATION_PROMPT = PromptTemplate(
     ),
 )
 
+_INDEPENDENT_VERIFICATION_PROMPT = PromptTemplate(
+    name="independent_transcription_verification",
+    system_prompt=(
+        "You are independently transcribing a historical page image for "
+        "verification. Produce a conservative transcription from the image "
+        "alone. Do not correct, translate, summarize, or explain."
+    ),
+    user_prompt_template=(
+        "Independently transcribe the page shown in the image.\n"
+        "Internal app page sequence: {page_sequence}.\n"
+        "\n"
+        "Source instructions:\n"
+        "{structure_rules}\n"
+        "\n"
+        "Return only the transcription."
+    ),
+)
+
 
 _BUILTIN_PRESETS = {
     "Handwritten Transcription": TaskPreset(
@@ -351,6 +381,17 @@ _BUILTIN_PRESETS = {
         target_language="English",
         translation_rules="",
     ),
+    "Independent Transcription Verification": TaskPreset(
+        name="Independent Transcription Verification",
+        task_type=TASK_VERIFY,
+        source_genre="general historical text",
+        prompt_template=_INDEPENDENT_VERIFICATION_PROMPT,
+        model_config=_TRANSCRIPTION_BASE_MODEL,
+        batch_size=1,
+        preserve_line_breaks=True,
+        preserve_marginalia=True,
+        normalize_whitespace=False,
+    ),
 }
 
 
@@ -358,6 +399,7 @@ _TASK_DEFINITIONS = {
     TASK_TRANSCRIBE: _TRANSCRIPTION_DEFINITION,
     TASK_CORRECT: _CORRECTION_DEFINITION,
     TASK_TRANSLATE: _TRANSLATION_DEFINITION,
+    TASK_VERIFY: _VERIFICATION_DEFINITION,
 }
 
 

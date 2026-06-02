@@ -7,15 +7,17 @@ from pathlib import Path
 import fitz
 from PIL import Image
 import pytest
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 from archivestudio.core.ingest import (
     import_image_file,
     import_image_files,
     import_image_folder,
     import_pdf,
+    import_pdfs,
 )
 from archivestudio.core.ingest.images import ImageImportError
+from archivestudio.core.ingest.pdf import PdfImportError
 from archivestudio.core.models import (
     Page,
     ProjectInfo,
@@ -30,7 +32,11 @@ from archivestudio.core.project import (
     available_project_root,
     create_project,
     create_project_with_available_name,
+    discover_projects,
     open_project,
+    open_project_selection,
+    project_summary,
+    project_root_from_selection,
     rename_project,
     safe_project_name,
 )
@@ -54,6 +60,31 @@ def test_create_and_open_project(tmp_project_root: Path) -> None:
     reopened = open_project(tmp_project_root)
     try:
         assert reopened.name == "Test Letterbook"
+    finally:
+        reopened.close()
+
+
+def test_open_project_migrates_v1_project_to_verification_schema(tmp_path: Path) -> None:
+    project_root = tmp_path / "old-project"
+    project = create_project(project_root, name="Old Project")
+    try:
+        with project.engine.begin() as connection:
+            connection.exec_driver_sql("DROP TABLE verification_flags")
+            connection.exec_driver_sql("DROP TABLE verification_results")
+        with project.session() as s:
+            info = s.execute(select(ProjectInfo)).scalar_one()
+            info.schema_version = 1
+    finally:
+        project.close()
+
+    reopened = open_project(project_root)
+    try:
+        table_names = set(inspect(reopened.engine).get_table_names())
+        assert "verification_results" in table_names
+        assert "verification_flags" in table_names
+        with reopened.session() as s:
+            info = s.execute(select(ProjectInfo)).scalar_one()
+            assert info.schema_version == SCHEMA_VERSION
     finally:
         reopened.close()
 
@@ -112,6 +143,88 @@ def test_safe_project_name_falls_back_for_empty_names() -> None:
 def test_open_project_rejects_missing(tmp_path: Path) -> None:
     with pytest.raises(ProjectNotFoundError):
         open_project(tmp_path / "does-not-exist")
+
+
+def test_project_root_from_selection_accepts_project_folder(tmp_project_root: Path) -> None:
+    project = create_project(tmp_project_root, name="Folder Project")
+    try:
+        assert project_root_from_selection(tmp_project_root) == tmp_project_root
+    finally:
+        project.close()
+
+
+def test_project_root_from_selection_accepts_project_db_file(tmp_project_root: Path) -> None:
+    project = create_project(tmp_project_root, name="DB File Project")
+    try:
+        assert project_root_from_selection(tmp_project_root / PROJECT_DB_FILENAME) == tmp_project_root
+    finally:
+        project.close()
+
+
+def test_open_project_selection_accepts_parent_with_one_project(tmp_path: Path) -> None:
+    parent = tmp_path / "projects"
+    parent.mkdir()
+    project = create_project(parent / "Only Project", name="Only Project")
+    project.close()
+
+    reopened = open_project_selection(parent)
+    try:
+        assert reopened.root == parent / "Only Project"
+        assert reopened.name == "Only Project"
+    finally:
+        reopened.close()
+
+
+def test_project_summary_reads_display_name(tmp_project_root: Path) -> None:
+    project = create_project(tmp_project_root, name="Picker Name")
+    project.close()
+
+    summary = project_summary(tmp_project_root)
+
+    assert summary is not None
+    assert summary.root == tmp_project_root
+    assert summary.name == "Picker Name"
+    assert summary.modified_at is not None
+
+
+def test_discover_projects_lists_valid_projects_by_name(tmp_path: Path) -> None:
+    parent = tmp_path / "projects"
+    parent.mkdir()
+    create_project(parent / "Alpha Folder", name="Alpha Project").close()
+    create_project(parent / "Beta Folder", name="Beta Project").close()
+    (parent / "not-a-project").mkdir()
+
+    projects = discover_projects(parent)
+
+    assert {project.name for project in projects} == {"Alpha Project", "Beta Project"}
+    assert {project.root.name for project in projects} == {"Alpha Folder", "Beta Folder"}
+
+
+def test_discover_projects_skips_invalid_project_db(tmp_path: Path) -> None:
+    parent = tmp_path / "projects"
+    broken = parent / "Broken"
+    broken.mkdir(parents=True)
+    (broken / PROJECT_DB_FILENAME).write_text("not sqlite", encoding="utf-8")
+
+    assert discover_projects(parent) == []
+
+
+def test_project_root_from_selection_rejects_parent_with_multiple_projects(tmp_path: Path) -> None:
+    parent = tmp_path / "projects"
+    parent.mkdir()
+    create_project(parent / "One", name="One").close()
+    create_project(parent / "Two", name="Two").close()
+
+    with pytest.raises(ProjectNotFoundError, match="more than one"):
+        project_root_from_selection(parent)
+
+
+def test_project_root_from_selection_rejects_invalid_folder(tmp_path: Path) -> None:
+    invalid = tmp_path / "not-a-project"
+    invalid.mkdir()
+
+    with pytest.raises(ProjectNotFoundError, match="folder containing project.db"):
+        project_root_from_selection(invalid)
 
 
 def test_text_version_current_uniqueness(tmp_project_root: Path) -> None:
@@ -288,3 +401,81 @@ def test_import_pdf_appends_pages_after_existing_images(tmp_path: Path) -> None:
         assert (project.images_dir / "page_0003.png").is_file()
     finally:
         project.close()
+
+
+def test_import_pdfs_continues_page_sequence_in_selected_order(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "project-multi-pdf", name="Multi PDF Import")
+    first_pdf = _write_test_pdf(tmp_path / "second_selected.pdf", ["A1", "A2"])
+    second_pdf = _write_test_pdf(tmp_path / "first_selected.pdf", ["B1"])
+
+    try:
+        result = import_pdfs(
+            project,
+            [first_pdf, second_pdf],
+            source_type="printed",
+            dpi=100,
+        )
+
+        assert result.page_count == 3
+
+        with project.session() as s:
+            pages = s.execute(select(Page).order_by(Page.sequence)).scalars().all()
+
+        assert [page.sequence for page in pages] == [1, 2, 3]
+        assert [page.image_path for page in pages] == [
+            "images/page_0001.png",
+            "images/page_0002.png",
+            "images/page_0003.png",
+        ]
+        assert pages[0].notes == "Imported from PDF: second_selected.pdf page 1"
+        assert pages[1].notes == "Imported from PDF: second_selected.pdf page 2"
+        assert pages[2].notes == "Imported from PDF: first_selected.pdf page 1"
+    finally:
+        project.close()
+
+
+def test_import_pdfs_can_use_natural_filename_order_as_fallback(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "project-sorted-pdf", name="Sorted PDF Import")
+    page10 = _write_test_pdf(tmp_path / "page10.pdf", ["10"])
+    page2 = _write_test_pdf(tmp_path / "page2.pdf", ["2"])
+
+    try:
+        result = import_pdfs(
+            project,
+            [page10, page2],
+            source_type="printed",
+            dpi=100,
+            preserve_order=False,
+        )
+
+        assert result.page_count == 2
+
+        with project.session() as s:
+            pages = s.execute(select(Page).order_by(Page.sequence)).scalars().all()
+
+        assert pages[0].notes == "Imported from PDF: page2.pdf page 1"
+        assert pages[1].notes == "Imported from PDF: page10.pdf page 1"
+    finally:
+        project.close()
+
+
+def test_import_pdfs_reports_failed_pdf_name(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "project-failed-pdf", name="Failed PDF Import")
+    good_pdf = _write_test_pdf(tmp_path / "good.pdf", ["ok"])
+    missing_pdf = tmp_path / "missing.pdf"
+
+    try:
+        with pytest.raises(PdfImportError, match="missing.pdf"):
+            import_pdfs(project, [good_pdf, missing_pdf], dpi=100)
+    finally:
+        project.close()
+
+
+def _write_test_pdf(path: Path, labels: list[str]) -> Path:
+    document = fitz.open()
+    for label in labels:
+        page = document.new_page(width=200, height=100)
+        page.insert_text((24, 50), label)
+    document.save(path)
+    document.close()
+    return path

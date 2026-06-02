@@ -1,12 +1,14 @@
 """SQLAlchemy 2.0 declarative models — the per-project SQLite schema.
 
-Four tables:
+Six tables:
 
 * ``project_info`` — single-row metadata.
 * ``pages`` — one row per imported page image.
 * ``task_runs`` — one row per AI batch invocation.
 * ``text_versions`` — all historical text for each page/stage, with
   provenance (``created_by``, ``source_version_id``, ``task_run_id``).
+* ``verification_results`` — independent verifier transcriptions for review.
+* ``verification_flags`` — text differences awaiting human decision.
 
 One *current* TextVersion per ``(page_id, stage)`` is enforced via a partial
 unique index on ``is_current = 1``.
@@ -32,7 +34,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 # --- Stage constants ---------------------------------------------------------
@@ -54,6 +56,33 @@ TASK_STATUS_COMPLETED = "completed"
 TASK_STATUS_PARTIAL = "partial"
 TASK_STATUS_FAILED = "failed"
 TASK_STATUS_CANCELLED = "cancelled"
+
+
+# --- Verification review status --------------------------------------------
+
+VERIFICATION_FLAG_REPLACE = "replace"
+VERIFICATION_FLAG_INSERT = "insert"
+VERIFICATION_FLAG_DELETE = "delete"
+VERIFICATION_FLAG_ALIGNMENT_WARNING = "alignment_warning"
+VERIFICATION_FLAG_TYPES: tuple[str, ...] = (
+    VERIFICATION_FLAG_REPLACE,
+    VERIFICATION_FLAG_INSERT,
+    VERIFICATION_FLAG_DELETE,
+    VERIFICATION_FLAG_ALIGNMENT_WARNING,
+)
+
+VERIFICATION_STATUS_OPEN = "open"
+VERIFICATION_STATUS_KEPT_PRIMARY = "kept_primary"
+VERIFICATION_STATUS_ACCEPTED_ALTERNATIVE = "accepted_alternative"
+VERIFICATION_STATUS_MANUAL_EDIT = "manual_edit"
+VERIFICATION_STATUS_STALE = "stale"
+VERIFICATION_FLAG_STATUSES: tuple[str, ...] = (
+    VERIFICATION_STATUS_OPEN,
+    VERIFICATION_STATUS_KEPT_PRIMARY,
+    VERIFICATION_STATUS_ACCEPTED_ALTERNATIVE,
+    VERIFICATION_STATUS_MANUAL_EDIT,
+    VERIFICATION_STATUS_STALE,
+)
 
 
 # --- Source type (how a page was ingested/what it shows) --------------------
@@ -114,6 +143,16 @@ class Page(Base):
         cascade="all, delete-orphan",
         order_by="TextVersion.created_at",
     )
+    verification_results: Mapped[list["VerificationResult"]] = relationship(
+        back_populates="page",
+        cascade="all, delete-orphan",
+        order_by="VerificationResult.created_at",
+    )
+    verification_flags: Mapped[list["VerificationFlag"]] = relationship(
+        back_populates="page",
+        cascade="all, delete-orphan",
+        order_by="VerificationFlag.created_at",
+    )
 
     __table_args__ = (
         UniqueConstraint("sequence", name="uq_pages_sequence"),
@@ -139,6 +178,9 @@ class TaskRun(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     text_versions: Mapped[list["TextVersion"]] = relationship(back_populates="task_run")
+    verification_results: Mapped[list["VerificationResult"]] = relationship(
+        back_populates="task_run"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - trivial
         return f"<TaskRun type={self.task_type!r} preset={self.preset_name!r} status={self.status!r}>"
@@ -175,6 +217,10 @@ class TextVersion(Base):
         remote_side="TextVersion.id",
         foreign_keys=[source_version_id],
     )
+    verification_results: Mapped[list["VerificationResult"]] = relationship(
+        back_populates="source_text_version",
+        foreign_keys="VerificationResult.source_text_version_id",
+    )
 
     __table_args__ = (
         Index("idx_text_versions_page_stage", "page_id", "stage"),
@@ -192,4 +238,116 @@ class TextVersion(Base):
         return (
             f"<TextVersion page={self.page_id} stage={self.stage!r} "
             f"current={self.is_current} by={self.created_by!r}>"
+        )
+
+
+class VerificationResult(Base):
+    __tablename__ = "verification_results"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    page_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("pages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_text_version_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("text_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    task_run_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("task_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    verifier_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    alignment_status: Mapped[str] = mapped_column(String(32), nullable=False, default="ok")
+    alignment_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+
+    page: Mapped[Page] = relationship(back_populates="verification_results")
+    source_text_version: Mapped[TextVersion] = relationship(
+        back_populates="verification_results",
+        foreign_keys=[source_text_version_id],
+    )
+    task_run: Mapped[Optional[TaskRun]] = relationship(back_populates="verification_results")
+    flags: Mapped[list["VerificationFlag"]] = relationship(
+        back_populates="verification_result",
+        cascade="all, delete-orphan",
+        order_by="VerificationFlag.primary_start",
+    )
+
+    __table_args__ = (
+        Index("idx_verification_results_page_source", "page_id", "source_text_version_id"),
+        Index("idx_verification_results_task_run", "task_run_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial
+        return (
+            f"<VerificationResult page={self.page_id} "
+            f"source_version={self.source_text_version_id}>"
+        )
+
+
+class VerificationFlag(Base):
+    __tablename__ = "verification_flags"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    verification_result_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("verification_results.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    page_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("pages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_text_version_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("text_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    primary_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    primary_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    primary_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    alternative_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    flag_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=VERIFICATION_STATUS_OPEN,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    decided_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    resulting_text_version_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("text_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    verification_result: Mapped[VerificationResult] = relationship(back_populates="flags")
+    page: Mapped[Page] = relationship(back_populates="verification_flags")
+    source_text_version: Mapped[TextVersion] = relationship(
+        foreign_keys=[source_text_version_id],
+    )
+    resulting_text_version: Mapped[Optional[TextVersion]] = relationship(
+        foreign_keys=[resulting_text_version_id],
+    )
+
+    __table_args__ = (
+        Index("idx_verification_flags_page_status", "page_id", "status"),
+        Index(
+            "idx_verification_flags_source_status",
+            "source_text_version_id",
+            "status",
+        ),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial
+        return (
+            f"<VerificationFlag page={self.page_id} type={self.flag_type!r} "
+            f"status={self.status!r}>"
         )

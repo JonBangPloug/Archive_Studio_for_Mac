@@ -9,7 +9,16 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QFont, QKeySequence
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QCloseEvent,
+    QFont,
+    QKeySequence,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -30,6 +39,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStatusBar,
+    QTextEdit,
     QToolBar,
     QToolButton,
     QVBoxLayout,
@@ -55,8 +65,13 @@ from archivestudio.core.export.profiles import (
     EXPORT_PROFILE_LABELS,
     EXPORT_PROFILE_PATIENT_JOURNAL,
 )
-from archivestudio.core.ingest import import_image_files, import_image_folder, import_pdf
+from archivestudio.core.ingest import import_image_files, import_image_folder, import_pdfs
 from archivestudio.core.models import STAGES, TASK_STATUS_CANCELLED, Page, TextVersion
+from archivestudio.core.models import (
+    VERIFICATION_STATUS_ACCEPTED_ALTERNATIVE,
+    VERIFICATION_STATUS_KEPT_PRIMARY,
+    VERIFICATION_STATUS_MANUAL_EDIT,
+)
 from archivestudio.core.page_operations import (
     PageNotFoundError,
     delete_project_pages,
@@ -65,10 +80,12 @@ from archivestudio.core.page_operations import (
 )
 from archivestudio.core.project import (
     Project,
+    ProjectNotFoundError,
     available_project_root,
     create_project,
     create_project_with_available_name,
-    open_project,
+    discover_projects,
+    open_project_selection,
     rename_project,
     safe_project_name,
 )
@@ -78,6 +95,7 @@ from archivestudio.core.tasks import (
     TASK_CORRECT,
     TASK_TRANSLATE,
     TASK_TRANSCRIBE,
+    TASK_VERIFY,
     get_preset,
     list_presets,
     run_correction,
@@ -85,11 +103,18 @@ from archivestudio.core.tasks import (
     run_printed_ocr_and_correction,
     run_transcription,
     run_translation,
+    run_verification,
 )
 from archivestudio.core.tasks.runs import TaskProgress, TaskRunSummary
 from archivestudio.core.tasks.cancellation import CancellationToken
 from archivestudio.core.tasks.text_versions import get_current_text_version, save_manual_text_version
 from archivestudio.core.tasks.workflows import WorkflowRunSummary
+from archivestudio.core.verification import (
+    apply_pending_verification_decisions,
+    load_open_verification_flags,
+    mark_open_verification_flags_stale,
+    mark_verification_flag_decision,
+)
 from archivestudio.ui.task_ranges import PageRangeParseError, parse_page_range_spec
 from archivestudio.ui.task_launch import (
     TaskLaunch,
@@ -100,8 +125,13 @@ from archivestudio.ui.task_launch import (
 )
 from archivestudio.ui.dialogs.settings_dialog import SettingsDialog
 from archivestudio.ui.dialogs.activity_log_dialog import ActivityLogDialog
+from archivestudio.ui.dialogs.project_picker_dialog import ProjectPickerDialog
 from archivestudio.ui.dialogs.task_prompt_settings_dialog import TaskPromptSettingsDialog
 from archivestudio.ui.widgets.image_viewer import ImageViewer
+from archivestudio.ui.widgets.verification_panel import (
+    VerificationFlagView,
+    VerificationPanel,
+)
 from archivestudio.ui.workers.background_task_runner import BackgroundTaskRunner
 
 
@@ -134,6 +164,8 @@ class MainWindow(QMainWindow):
         self._current_page_id: str | None = None
         self._current_stage = STAGES[0]
         self._loading_editor = False
+        self._verification_flags: dict[str, VerificationFlagView] = {}
+        self._pending_verification_decisions: dict[str, str] = {}
         self._task_is_running = False
         self._active_task_launch: TaskLaunch | None = None
         self._workspace_layout = WORKSPACE_LAYOUT_STACKED
@@ -189,7 +221,7 @@ class MainWindow(QMainWindow):
         self.import_images_action = QAction("Image Folder...", self)
         self.import_images_action.triggered.connect(self._import_images_dialog)
 
-        self.import_pdf_action = QAction("PDF...", self)
+        self.import_pdf_action = QAction("PDFs...", self)
         self.import_pdf_action.triggered.connect(self._import_pdf_dialog)
 
         self.save_text_action = QAction("Save Changes", self)
@@ -311,6 +343,10 @@ class MainWindow(QMainWindow):
         self.translate_action.triggered.connect(
             lambda: self._start_task(task_type=TASK_TRANSLATE, output_stage="translated")
         )
+        self.verify_action = QAction("Verify Transcription...", self)
+        self.verify_action.triggered.connect(
+            lambda: self._start_task(task_type=TASK_VERIFY, output_stage="verification")
+        )
 
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction(self.new_project_action)
@@ -359,6 +395,8 @@ class MainWindow(QMainWindow):
         tasks_menu.addSeparator()
         tasks_menu.addAction(self.correct_action)
         tasks_menu.addAction(self.translate_action)
+        tasks_menu.addSeparator()
+        tasks_menu.addAction(self.verify_action)
 
         settings_menu = self.menuBar().addMenu("&Settings")
         settings_menu.addAction(self.settings_action)
@@ -385,6 +423,7 @@ class MainWindow(QMainWindow):
         task_toolbar.addAction(self.printed_ocr_correction_action)
         task_toolbar.addAction(self.correct_action)
         task_toolbar.addAction(self.translate_action)
+        task_toolbar.addAction(self.verify_action)
         self.addToolBar(task_toolbar)
 
     def _build_ui(self) -> None:
@@ -503,6 +542,17 @@ class MainWindow(QMainWindow):
         text_panel_layout.addWidget(text_controls)
         text_panel_layout.addWidget(self.text_editor, 1)
         text_panel_layout.addWidget(self.text_meta_label)
+        self.verification_panel = VerificationPanel(self)
+        self.verification_panel.flag_selected.connect(self._select_verification_flag)
+        self.verification_panel.keep_requested.connect(self._keep_verification_primary)
+        self.verification_panel.use_alternative_requested.connect(
+            self._use_verification_alternative
+        )
+        self.verification_panel.manual_edit_requested.connect(
+            self._mark_verification_manual_edit
+        )
+        self.verification_panel.setVisible(False)
+        text_panel_layout.addWidget(self.verification_panel)
 
         self.workspace_splitter = QSplitter(self)
         self.workspace_splitter.setChildrenCollapsible(False)
@@ -834,6 +884,7 @@ class MainWindow(QMainWindow):
         self.printed_ocr_correction_action.setEnabled(has_project and has_page and can_interact)
         self.correct_action.setEnabled(has_project and has_page and can_interact)
         self.translate_action.setEnabled(has_project and has_page and can_interact)
+        self.verify_action.setEnabled(has_project and has_page and can_interact)
         self.page_list.setEnabled(can_interact)
         self.delete_page_button.setEnabled(has_selected_pages and can_interact)
         self.move_page_up_button.setEnabled(has_selected_pages and can_interact)
@@ -847,6 +898,7 @@ class MainWindow(QMainWindow):
         self.save_button.setEnabled(
             has_page and can_interact and self.text_editor.document().isModified()
         )
+        self.verification_panel.setEnabled(can_interact)
         self._busy_indicator.setVisible(self._task_is_running)
         self._task_progress_label.setVisible(self._task_is_running)
         self._cancel_task_button.setVisible(self._task_is_running)
@@ -856,41 +908,167 @@ class MainWindow(QMainWindow):
         if not self._maybe_resolve_unsaved_changes():
             return
 
-        project = self._prompt_create_project()
+        try:
+            project = self._prompt_create_project()
+        except Exception as exc:
+            self._show_error("Could not create project", exc)
+            return
         if project is None:
             return
 
         self._set_project(project)
         self.statusBar().showMessage(f"Created project at {project.root}", 5000)
+        self._offer_initial_import()
 
     def _prompt_create_project(self, *, suggested_name: str | None = None) -> Project | None:
-        parent_dir = QFileDialog.getExistingDirectory(
-            self,
-            "Choose Parent Directory for New Project",
-            str(default_projects_dir()),
+        project_name = self._prompt_project_name(
+            suggested=safe_project_name(suggested_name or "Archive Project")
         )
-        if not parent_dir:
+        if project_name is None:
             return None
 
-        parent_path = Path(parent_dir)
-        suggested = safe_project_name(suggested_name or "Archive Project")
+        parent_path = self._prompt_project_parent_location()
+        if parent_path is None:
+            return None
+
+        while True:
+            requested_name = safe_project_name(project_name)
+            project_root = available_project_root(parent_path, requested_name)
+            if project_root.name == requested_name:
+                return create_project(project_root, name=project_root.name)
+
+            choice = self._confirm_project_name_variant(
+                requested_name=requested_name,
+                available_name=project_root.name,
+            )
+            if choice == "cancel":
+                return None
+            if choice == "rename":
+                project_name = self._prompt_project_name(suggested=project_root.name)
+                if project_name is None:
+                    return None
+                continue
+            return create_project(project_root, name=project_root.name)
+
+    def _prompt_project_name(self, *, suggested: str) -> str | None:
         project_name, ok = QInputDialog.getText(
             self,
             "New Project",
-            "Project name:",
+            (
+                "Archive Studio projects are folders containing project.db, "
+                "images, exports, and task history.\n\n"
+                "Project name:"
+            ),
             text=suggested,
         )
         if not ok or not project_name.strip():
             return None
+        return project_name
 
-        project_root = available_project_root(parent_path, project_name)
-        return create_project(project_root, name=project_root.name)
+    def _prompt_project_parent_location(self) -> Path | None:
+        default_parent = default_projects_dir()
+        message = QMessageBox(self)
+        message.setWindowTitle("Project Location")
+        message.setText("Where should Archive Studio create this project folder?")
+        message.setInformativeText(
+            f"Default location:\n{default_parent}\n\n"
+            "You can choose another parent folder if you prefer."
+        )
+        default_button = message.addButton(
+            "Use Default Location",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        choose_button = message.addButton(
+            "Choose Location...",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        message.addButton(QMessageBox.StandardButton.Cancel)
+        message.setDefaultButton(default_button)
+        message.exec()
+
+        clicked = message.clickedButton()
+        if clicked == default_button:
+            return default_parent
+        if clicked != choose_button:
+            return None
+
+        parent_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose Parent Folder for New Archive Studio Project",
+            str(default_parent),
+        )
+        return Path(parent_dir) if parent_dir else None
+
+    def _confirm_project_name_variant(self, *, requested_name: str, available_name: str) -> str:
+        message = QMessageBox(self)
+        message.setWindowTitle("Project Name Already Exists")
+        message.setText(f'A project named "{requested_name}" already exists.')
+        message.setInformativeText(
+            f'Archive Studio can create "{available_name}" instead, '
+            "or you can choose another name."
+        )
+        create_button = message.addButton(
+            f'Create "{available_name}"',
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        rename_button = message.addButton(
+            "Choose Another Name",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        message.addButton(QMessageBox.StandardButton.Cancel)
+        message.setDefaultButton(create_button)
+        message.exec()
+
+        clicked = message.clickedButton()
+        if clicked == create_button:
+            return "create"
+        if clicked == rename_button:
+            return "rename"
+        return "cancel"
+
+    def _offer_initial_import(self) -> None:
+        if self.project is None:
+            return
+        message = QMessageBox(self)
+        message.setWindowTitle("Import Pages")
+        message.setText("Project created and opened.")
+        message.setInformativeText("Would you like to import pages into this project now?")
+        pdf_button = message.addButton("Import PDFs...", QMessageBox.ButtonRole.ActionRole)
+        images_button = message.addButton("Import Images...", QMessageBox.ButtonRole.ActionRole)
+        folder_button = message.addButton(
+            "Import Image Folder...",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        not_now_button = message.addButton("Not Now", QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(pdf_button)
+        message.exec()
+
+        clicked = message.clickedButton()
+        if clicked == pdf_button:
+            self._import_pdf_dialog()
+        elif clicked == images_button:
+            self._import_image_dialog()
+        elif clicked == folder_button:
+            self._import_images_dialog()
+        elif clicked == not_now_button:
+            return
 
     def _open_project_dialog(self) -> None:
         if not self._maybe_resolve_unsaved_changes():
             return
 
-        project = self._prompt_open_project()
+        try:
+            project = self._prompt_open_project()
+        except ProjectNotFoundError as exc:
+            QMessageBox.warning(
+                self,
+                "Could not open project",
+                str(exc),
+            )
+            return
+        except Exception as exc:
+            self._show_error("Could not open project", exc)
+            return
         if project is None:
             return
 
@@ -898,10 +1076,33 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Opened project {project.name}", 5000)
 
     def _prompt_open_project(self) -> Project | None:
-        root = QFileDialog.getExistingDirectory(self, "Open Project", str(default_projects_dir()))
+        default_location = default_projects_dir()
+        projects = discover_projects(default_location)
+        dialog = ProjectPickerDialog(
+            projects,
+            default_location=default_location,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        if dialog.choose_other_requested:
+            return self._prompt_open_project_from_folder(default_location)
+
+        root = dialog.selected_project_root()
+        if root is None:
+            return None
+        return open_project_selection(root)
+
+    def _prompt_open_project_from_folder(self, default_location: Path) -> Project | None:
+        root = QFileDialog.getExistingDirectory(
+            self,
+            "Choose Other Archive Studio Project Folder",
+            str(default_location),
+        )
         if not root:
             return None
-        return open_project(Path(root))
+        return open_project_selection(Path(root))
 
     def _rename_project_dialog(self) -> None:
         if self.project is None:
@@ -973,24 +1174,32 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Imported {result.page_count} page images", 5000)
 
     def _import_pdf_dialog(self) -> None:
-        filename, _ = QFileDialog.getOpenFileName(
+        filenames, _ = QFileDialog.getOpenFileNames(
             self,
-            "Import PDF",
+            "Import PDFs",
             str(self._initial_import_dir()),
             "PDF files (*.pdf)",
         )
-        if not filename:
+        if not filenames:
             return
-        self._remember_import_dir(Path(filename).parent)
+        selected_paths = [Path(filename) for filename in filenames]
+        self._remember_import_dir(selected_paths[0].parent)
         try:
-            if not self._ensure_project_for_import(Path(filename), import_label="PDF"):
+            source_for_project = (
+                selected_paths[0].parent if len(selected_paths) > 1 else selected_paths[0]
+            )
+            import_label = "PDFs" if len(selected_paths) > 1 else "PDF"
+            if not self._ensure_project_for_import(source_for_project, import_label=import_label):
                 return
-            result = import_pdf(self.project, Path(filename), source_type=None)
+            result = import_pdfs(self.project, selected_paths, source_type=None)
         except Exception as exc:
-            self._show_error("Could not import PDF", exc)
+            self._show_error("Could not import PDFs", exc)
             return
         self._reload_pages(select_page_id=result.pages[0].page_id if result.pages else None)
-        self.statusBar().showMessage(f"Imported {result.page_count} PDF pages", 5000)
+        self.statusBar().showMessage(
+            f"Imported {result.page_count} page(s) from {len(selected_paths)} PDF(s)",
+            5000,
+        )
 
     def _initial_import_dir(self) -> Path:
         try:
@@ -1184,6 +1393,7 @@ class MainWindow(QMainWindow):
             self.image_label.setText("No image loaded")
             self.text_meta_label.setText("No text version loaded")
             self._set_editor_text("")
+            self._set_verification_flags([])
             self.image_viewer.clear_image()
             self._refresh_window_state()
             return
@@ -1206,6 +1416,7 @@ class MainWindow(QMainWindow):
         if self.project is None or self._current_page_id is None:
             self._set_editor_text("")
             self.text_meta_label.setText("No text version loaded")
+            self._set_verification_flags([])
             self._refresh_window_state()
             return
 
@@ -1221,6 +1432,7 @@ class MainWindow(QMainWindow):
             self.text_meta_label.setText(
                 f"No current {self._current_stage} text version. Edit and save to create one."
             )
+            self._set_verification_flags([])
         else:
             self._set_editor_text(version.content)
             meta_bits = [
@@ -1231,6 +1443,7 @@ class MainWindow(QMainWindow):
             if version.source_version_id:
                 meta_bits.append(f"Source version: {version.source_version_id}")
             self.text_meta_label.setText(" | ".join(meta_bits))
+            self._load_verification_flags_for_version(version.id)
         self._refresh_window_state()
 
     def _set_editor_text(self, text: str) -> None:
@@ -1248,6 +1461,12 @@ class MainWindow(QMainWindow):
         self.save_button.setEnabled(
             modified and self._current_page_id is not None and not self._task_is_running
         )
+        if hasattr(self, "verification_panel"):
+            self.verification_panel.set_text_offsets_current(not modified)
+            if modified:
+                self.text_editor.setExtraSelections([])
+            else:
+                self._apply_verification_highlights()
 
     def _save_current_text_version(self) -> bool:
         if self.project is None or self._current_page_id is None:
@@ -1256,16 +1475,33 @@ class MainWindow(QMainWindow):
         content = self.text_editor.toPlainText()
         try:
             with self.project.session() as session:
-                save_manual_text_version(
+                previous_version = get_current_text_version(
+                    session,
+                    page_id=self._current_page_id,
+                    stage=self._current_stage,
+                )
+                text_version = save_manual_text_version(
                     session,
                     page_id=self._current_page_id,
                     stage=self._current_stage,
                     content=content,
                 )
+                if previous_version is not None:
+                    apply_pending_verification_decisions(
+                        session,
+                        source_text_version_id=previous_version.id,
+                        decisions=self._pending_verification_decisions,
+                        resulting_text_version_id=text_version.id,
+                    )
+                    mark_open_verification_flags_stale(
+                        session,
+                        source_text_version_id=previous_version.id,
+                    )
         except Exception as exc:
             self._show_error("Could not save text", exc)
             return False
 
+        self._pending_verification_decisions.clear()
         self.text_editor.document().setModified(False)
         self._load_current_stage_text()
         self.statusBar().showMessage(
@@ -1273,6 +1509,167 @@ class MainWindow(QMainWindow):
             4000,
         )
         return True
+
+    def _load_verification_flags_for_version(self, source_text_version_id: str) -> None:
+        if (
+            self.project is None
+            or self._current_page_id is None
+            or self._current_stage not in {"original", "corrected"}
+        ):
+            self._set_verification_flags([])
+            return
+        try:
+            with self.project.session() as session:
+                flags = load_open_verification_flags(
+                    session,
+                    page_id=self._current_page_id,
+                    source_text_version_id=source_text_version_id,
+                )
+                flag_views = [
+                    VerificationFlagView(
+                        id=flag.id,
+                        primary_start=flag.primary_start,
+                        primary_end=flag.primary_end,
+                        primary_text=flag.primary_text,
+                        alternative_text=flag.alternative_text,
+                        flag_type=flag.flag_type,
+                    )
+                    for flag in flags
+                ]
+        except Exception:
+            log.exception("Could not load verification flags")
+            flag_views = []
+        self._set_verification_flags(flag_views)
+
+    def _set_verification_flags(
+        self,
+        flags: list[VerificationFlagView],
+        *,
+        reset_pending: bool = True,
+    ) -> None:
+        if reset_pending:
+            self._pending_verification_decisions.clear()
+        self._verification_flags = {flag.id: flag for flag in flags}
+        self.verification_panel.set_flags(flags)
+        self.verification_panel.set_text_offsets_current(
+            not self.text_editor.document().isModified()
+        )
+        self._apply_verification_highlights()
+
+    def _apply_verification_highlights(self) -> None:
+        if self.text_editor.document().isModified():
+            self.text_editor.setExtraSelections([])
+            return
+        selections = []
+        text_length = len(self.text_editor.toPlainText())
+        for flag in self._verification_flags.values():
+            start = max(0, min(flag.primary_start, text_length))
+            end = max(0, min(flag.primary_end, text_length))
+            if start == end and text_length:
+                end = min(text_length, start + 1)
+            if start == end:
+                continue
+            cursor = self.text_editor.textCursor()
+            cursor.setPosition(start)
+            cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = cursor
+            selection.format = self._verification_highlight_format()
+            selections.append(selection)
+        self.text_editor.setExtraSelections(selections)
+
+    def _verification_highlight_format(self) -> QTextCharFormat:
+        text_format = QTextCharFormat()
+        text_format.setBackground(QColor("#fff3b0"))
+        text_format.setUnderlineColor(QColor("#b45309"))
+        text_format.setUnderlineStyle(QTextCharFormat.UnderlineStyle.WaveUnderline)
+        return text_format
+
+    def _select_verification_flag(self, flag_id: str) -> None:
+        flag = self._verification_flags.get(flag_id)
+        if flag is None:
+            return
+        text_length = len(self.text_editor.toPlainText())
+        start = max(0, min(flag.primary_start, text_length))
+        end = max(0, min(flag.primary_end, text_length))
+        cursor = self.text_editor.textCursor()
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        self.text_editor.setTextCursor(cursor)
+        self.text_editor.setFocus()
+
+    def _keep_verification_primary(self, flag_id: str) -> None:
+        self._mark_verification_flag_status(flag_id, VERIFICATION_STATUS_KEPT_PRIMARY)
+
+    def _use_verification_alternative(self, flag_id: str) -> None:
+        flag = self._verification_flags.get(flag_id)
+        if flag is None:
+            return
+        text_length = len(self.text_editor.toPlainText())
+        start = max(0, min(flag.primary_start, text_length))
+        end = max(0, min(flag.primary_end, text_length))
+        cursor = self.text_editor.textCursor()
+        cursor.beginEditBlock()
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        cursor.insertText(flag.alternative_text)
+        cursor.endEditBlock()
+        self._pending_verification_decisions[flag_id] = VERIFICATION_STATUS_ACCEPTED_ALTERNATIVE
+        self._remove_pending_verification_flag(flag_id)
+        self.statusBar().showMessage(
+            "Inserted verifier alternative. Review the text, then Save Changes.",
+            7000,
+        )
+
+    def _mark_verification_manual_edit(self, flag_id: str) -> None:
+        self._pending_verification_decisions[flag_id] = VERIFICATION_STATUS_MANUAL_EDIT
+        self._remove_pending_verification_flag(flag_id)
+        self.statusBar().showMessage(
+            "Marked as resolved after edit. Save Changes to record the decision.",
+            7000,
+        )
+
+    def _remove_pending_verification_flag(self, flag_id: str) -> None:
+        self._set_verification_flags(
+            [
+                flag
+                for flag in self._verification_flags.values()
+                if flag.id != flag_id
+            ],
+            reset_pending=False,
+        )
+
+    def _mark_verification_flag_status(
+        self,
+        flag_id: str,
+        status: str,
+        *,
+        reload_flags: bool = True,
+    ) -> None:
+        if self.project is None:
+            return
+        try:
+            with self.project.session() as session:
+                mark_verification_flag_decision(
+                    session,
+                    flag_id=flag_id,
+                    status=status,
+                )
+        except Exception as exc:
+            self._show_error("Could not update verification flag", exc)
+            return
+        if reload_flags:
+            if self.text_editor.document().isModified():
+                self._set_verification_flags(
+                    [
+                        flag
+                        for flag in self._verification_flags.values()
+                        if flag.id != flag_id
+                    ],
+                    reset_pending=False,
+                )
+                return
+            self._load_current_stage_text()
 
     def _delete_selected_page(self) -> None:
         if self.project is None or self._current_page_id is None or self._task_is_running:
@@ -1716,6 +2113,17 @@ class MainWindow(QMainWindow):
                 provider,
                 preset,
                 page_ids=launch.page_ids,
+                progress_callback=self._background_tasks.report_progress,
+                cancellation_token=token,
+            )
+        elif task_type == TASK_VERIFY:
+            source_stage = self._current_stage if self._current_stage in {"original", "corrected"} else None
+            runner = lambda token: run_verification(
+                self.project,
+                provider,
+                preset,
+                page_ids=launch.page_ids,
+                source_stage=source_stage,
                 progress_callback=self._background_tasks.report_progress,
                 cancellation_token=token,
             )
@@ -2199,6 +2607,7 @@ class MainWindow(QMainWindow):
             TASK_TRANSCRIBE: "OCR / HTR",
             TASK_CORRECT: "Correction",
             TASK_TRANSLATE: "Translation",
+            TASK_VERIFY: "Verification",
         }.get(task_type, "Task")
         text, ok = QInputDialog.getMultiLineText(
             self,
@@ -2274,7 +2683,7 @@ class MainWindow(QMainWindow):
             return
 
         if isinstance(summary, TaskRunSummary):
-            if launch is not None:
+            if launch is not None and launch.output_stage in STAGES:
                 self._set_current_stage(launch.output_stage)
             self._reload_pages(select_page_id=self._current_page_id)
 
@@ -2349,6 +2758,7 @@ class MainWindow(QMainWindow):
             TASK_TRANSCRIBE: "Transcribe",
             TASK_CORRECT: "Correct",
             TASK_TRANSLATE: "Translate",
+            TASK_VERIFY: "Verify",
         }.get(progress.task_type, progress.task_type.title())
 
         if progress.pages_total:

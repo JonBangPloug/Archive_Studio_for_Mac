@@ -24,9 +24,13 @@ from archivestudio.core.models import (
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
+    VERIFICATION_STATUS_OPEN,
+    VERIFICATION_STATUS_STALE,
     Page,
     TaskRun,
     TextVersion,
+    VerificationFlag,
+    VerificationResult,
 )
 from archivestudio.core.project import create_project
 from archivestudio.core.tasks import (
@@ -34,6 +38,7 @@ from archivestudio.core.tasks import (
     run_correction,
     run_transcription,
     run_translation,
+    run_verification,
 )
 from archivestudio.core.tasks.artifacts import task_run_artifact_path
 from archivestudio.core.tasks.cancellation import CancellationToken
@@ -552,5 +557,129 @@ def test_run_translation_marks_task_run_failed_when_prompt_rendering_crashes(
         assert task_run.pages_failed == 1
         assert task_run.completed_at is not None
         assert task_run.error_message
+    finally:
+        project.close()
+
+
+def test_run_verification_creates_review_flags_without_overwriting_text(
+    tmp_path: Path,
+) -> None:
+    project = create_project(tmp_path / "project", name="Verification Run")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=1)
+    import_image_folder(project, source_dir, source_type="handwritten")
+
+    provider = FakeTranscriptionProvider()
+
+    try:
+        transcription_summary = run_transcription(
+            project,
+            provider,
+            replace(get_builtin_preset("Handwritten Transcription"), batch_size=1),
+        )
+        verification_summary = run_verification(
+            project,
+            provider,
+            replace(get_builtin_preset("Independent Transcription Verification"), batch_size=1),
+        )
+
+        assert transcription_summary.status == TASK_STATUS_COMPLETED
+        assert verification_summary.status == TASK_STATUS_COMPLETED
+        assert verification_summary.pages_completed == 1
+
+        with project.session() as session:
+            original_versions = session.execute(
+                select(TextVersion).where(TextVersion.stage == STAGE_ORIGINAL)
+            ).scalars().all()
+            result = session.execute(select(VerificationResult)).scalar_one()
+            flags = session.execute(select(VerificationFlag)).scalars().all()
+
+        assert len(original_versions) == 1
+        assert original_versions[0].content == "page 1 run-1"
+        assert result.source_text_version_id == original_versions[0].id
+        assert result.verifier_text == "page 1 run-2"
+        assert result.task_run_id == verification_summary.task_run_id
+        assert len(flags) == 1
+        assert flags[0].status == VERIFICATION_STATUS_OPEN
+        assert flags[0].primary_text == "1"
+        assert flags[0].alternative_text == "2"
+    finally:
+        project.close()
+
+
+def test_run_verification_prefers_current_corrected_text(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "project", name="Verification Source Stage")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=1)
+    import_image_folder(project, source_dir, source_type="printed")
+
+    provider = FakeTranscriptionProvider()
+
+    try:
+        run_transcription(
+            project,
+            provider,
+            replace(get_builtin_preset("Printed Transcription"), batch_size=1),
+        )
+        run_correction(
+            project,
+            provider,
+            replace(get_builtin_preset("Printed Correction"), batch_size=1),
+        )
+        run_verification(
+            project,
+            provider,
+            replace(get_builtin_preset("Independent Transcription Verification"), batch_size=1),
+        )
+
+        with project.session() as session:
+            corrected = session.execute(
+                select(TextVersion).where(
+                    TextVersion.stage == STAGE_CORRECTED,
+                    TextVersion.is_current.is_(True),
+                )
+            ).scalar_one()
+            result = session.execute(select(VerificationResult)).scalar_one()
+
+        assert result.source_stage == STAGE_CORRECTED
+        assert result.source_text_version_id == corrected.id
+    finally:
+        project.close()
+
+
+def test_run_verification_marks_previous_open_flags_stale(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "project", name="Verification Rerun")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=1)
+    import_image_folder(project, source_dir, source_type="handwritten")
+
+    provider = FakeTranscriptionProvider()
+
+    try:
+        run_transcription(
+            project,
+            provider,
+            replace(get_builtin_preset("Handwritten Transcription"), batch_size=1),
+        )
+        run_verification(
+            project,
+            provider,
+            replace(get_builtin_preset("Independent Transcription Verification"), batch_size=1),
+        )
+        run_verification(
+            project,
+            provider,
+            replace(get_builtin_preset("Independent Transcription Verification"), batch_size=1),
+        )
+
+        with project.session() as session:
+            flags = session.execute(
+                select(VerificationFlag).order_by(VerificationFlag.created_at)
+            ).scalars().all()
+
+        assert [flag.status for flag in flags] == [
+            VERIFICATION_STATUS_STALE,
+            VERIFICATION_STATUS_OPEN,
+        ]
     finally:
         project.close()

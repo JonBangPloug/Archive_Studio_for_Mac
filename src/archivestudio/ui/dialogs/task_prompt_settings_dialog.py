@@ -48,6 +48,7 @@ TASK_TYPE_LABELS = {
     "transcribe": "Transcribe",
     "correct": "Correct",
     "translate": "Translate",
+    "verify": "Verify",
 }
 
 PROVIDER_LABELS = {
@@ -712,6 +713,7 @@ class TaskPromptSettingsDialog(QDialog):
             "transcribe": "Transcribe",
             "correct": "Correct",
             "translate": "Translate",
+            "verify": "Verify Transcription",
         }.get(task_type, "the matching task")
         QMessageBox.information(
             self,

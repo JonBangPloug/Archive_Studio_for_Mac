@@ -8,6 +8,7 @@ from dataclasses import dataclass
 TASK_TRANSCRIBE = "transcribe"
 TASK_CORRECT = "correct"
 TASK_TRANSLATE = "translate"
+TASK_VERIFY = "verify"
 
 MODEL_TIER_FAST = "fast"
 MODEL_TIER_STRONG = "strong"

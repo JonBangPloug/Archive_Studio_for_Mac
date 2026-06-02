@@ -5,9 +5,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDialog
 
 from archivestudio.core.config.settings import AppSettings, ProviderSettings
+from archivestudio.core.project import ProjectNotFoundError, ProjectSummary
 from archivestudio.ui import main_window as main_window_module
+from archivestudio.ui.dialogs.project_picker_dialog import ProjectPickerDialog
 from archivestudio.ui.main_window import (
     WORKSPACE_LAYOUT_SIDE_BY_SIDE,
     WORKSPACE_LAYOUT_STACKED,
@@ -52,6 +55,118 @@ def test_delete_pages_message_uses_count_for_multiple_pages(qtbot) -> None:
 
     assert "Delete 20 selected pages?" in message
     assert "1, 2, 3" not in message
+
+
+def test_open_project_action_uses_simple_project_label(qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert window.open_project_action.text() == "Open Project..."
+
+
+def test_prompt_open_project_uses_project_picker_first(monkeypatch, qtbot, tmp_path) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    selected_root = tmp_path / "Picked Project"
+    sentinel_project = object()
+
+    class FakeProjectPicker:
+        choose_other_requested = False
+
+        def __init__(self, projects, *, default_location, parent=None):
+            self.projects = projects
+            self.default_location = default_location
+            self.parent = parent
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def selected_project_root(self):
+            return selected_root
+
+    monkeypatch.setattr(main_window_module, "default_projects_dir", lambda: tmp_path)
+    monkeypatch.setattr(main_window_module, "discover_projects", lambda path: ["summary"])
+    monkeypatch.setattr(main_window_module, "ProjectPickerDialog", FakeProjectPicker)
+    monkeypatch.setattr(
+        main_window_module,
+        "open_project_selection",
+        lambda path: sentinel_project if path == selected_root else None,
+    )
+
+    assert window._prompt_open_project() is sentinel_project
+
+
+def test_prompt_open_project_choose_other_uses_fallback(monkeypatch, qtbot, tmp_path) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+    sentinel_project = object()
+
+    class FakeProjectPicker:
+        choose_other_requested = True
+
+        def __init__(self, projects, *, default_location, parent=None):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def selected_project_root(self):
+            return None
+
+    monkeypatch.setattr(main_window_module, "default_projects_dir", lambda: tmp_path)
+    monkeypatch.setattr(main_window_module, "discover_projects", lambda path: [])
+    monkeypatch.setattr(main_window_module, "ProjectPickerDialog", FakeProjectPicker)
+    monkeypatch.setattr(
+        window,
+        "_prompt_open_project_from_folder",
+        lambda default_location: sentinel_project if default_location == tmp_path else None,
+    )
+
+    assert window._prompt_open_project() is sentinel_project
+
+
+def test_project_picker_dialog_lists_project_names(qtbot, tmp_path) -> None:
+    project_root = tmp_path / "Test 2"
+    dialog = ProjectPickerDialog(
+        [
+            ProjectSummary(
+                root=project_root,
+                name="Test 2",
+                modified_at=None,
+            )
+        ],
+        default_location=tmp_path,
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog.table.item(0, 0).text() == "Test 2"
+    assert dialog.selected_project_root() == project_root
+    assert dialog.open_button.isEnabled()
+
+
+def test_open_project_dialog_shows_project_folder_warning(monkeypatch, qtbot) -> None:
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    captured: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        window,
+        "_prompt_open_project",
+        lambda: (_ for _ in ()).throw(
+            ProjectNotFoundError("Please choose a folder containing project.db.")
+        ),
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda _parent, title, text: captured.append((title, text)),
+    )
+
+    window._open_project_dialog()
+
+    assert captured == [
+        ("Could not open project", "Please choose a folder containing project.db.")
+    ]
 
 
 def test_selected_pages_scope_label_is_short_for_many_pages(qtbot) -> None:

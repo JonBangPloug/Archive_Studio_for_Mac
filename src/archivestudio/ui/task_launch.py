@@ -11,7 +11,7 @@ from archivestudio.core.models import (
     SOURCE_TYPE_HANDWRITTEN,
     SOURCE_TYPE_PRINTED,
 )
-from archivestudio.core.tasks import TASK_CORRECT, TASK_TRANSLATE, TASK_TRANSCRIBE
+from archivestudio.core.tasks import TASK_CORRECT, TASK_TRANSLATE, TASK_TRANSCRIBE, TASK_VERIFY
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,12 @@ SOURCE_TYPE_PRESET_NAMES = {
         SOURCE_TYPE_PRINTED: "Scholarly Translation to English",
         SOURCE_TYPE_CATALOGUE: "Scholarly Translation to English",
         SOURCE_TYPE_CUSTOM: "Scholarly Translation to English",
+    },
+    TASK_VERIFY: {
+        SOURCE_TYPE_HANDWRITTEN: "Independent Transcription Verification",
+        SOURCE_TYPE_PRINTED: "Independent Transcription Verification",
+        SOURCE_TYPE_CATALOGUE: "Independent Transcription Verification",
+        SOURCE_TYPE_CUSTOM: "Independent Transcription Verification",
     },
 }
 

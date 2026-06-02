@@ -8,6 +8,7 @@ from archivestudio.core.tasks.types import (
     TASK_CORRECT,
     TASK_TRANSLATE,
     TASK_TRANSCRIBE,
+    TASK_VERIFY,
 )
 
 
@@ -42,6 +43,13 @@ _ALLOWED_PLACEHOLDERS = {
         "target_language",
         "text_to_process",
         "translation_rules",
+    },
+    TASK_VERIFY: {
+        "custom_instructions",
+        "page_sequence",
+        "source_genre",
+        "structure_rules",
+        "text_to_process",
     },
 }
 

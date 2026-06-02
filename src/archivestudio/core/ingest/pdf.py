@@ -12,6 +12,7 @@ from archivestudio.core.ingest.common import (
     ImportedPage,
     build_project_image_name,
     create_page_row,
+    natural_sort_key,
     next_page_sequence,
     project_image_absolute_path,
     project_image_relative_path,
@@ -27,6 +28,38 @@ DEFAULT_PDF_DPI = 200
 
 class PdfImportError(ValueError):
     """Raised when a PDF import request is invalid."""
+
+
+def import_pdfs(
+    project: Project,
+    pdf_paths: list[Path],
+    *,
+    source_type: str | None = None,
+    dpi: int = DEFAULT_PDF_DPI,
+    preserve_order: bool = True,
+) -> ImportResult:
+    """Import multiple PDFs as one continuous sequence of project pages."""
+    paths = [Path(path) for path in pdf_paths]
+    if not paths:
+        raise PdfImportError("No PDF files were selected for import.")
+    if not preserve_order:
+        paths = sorted(paths, key=lambda path: natural_sort_key(path.name))
+
+    imported: list[ImportedPage] = []
+    for pdf_path in paths:
+        try:
+            result = import_pdf(
+                project,
+                pdf_path,
+                source_type=source_type,
+                dpi=dpi,
+            )
+        except Exception as exc:
+            raise PdfImportError(f"Could not import PDF {pdf_path.name}: {exc}") from exc
+        imported.extend(result.pages)
+
+    log.info("Imported %s pages from %s PDFs", len(imported), len(paths))
+    return ImportResult(pages=imported)
 
 
 def import_pdf(

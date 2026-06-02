@@ -1,0 +1,481 @@
+"""Independent transcription verification task service."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Sequence
+
+from sqlalchemy import select
+
+from archivestudio.core.ai.base import AIProvider, PromptMessages, TranscriptionRequest
+from archivestudio.core.errors import classify_exception
+from archivestudio.core.models import (
+    STAGE_CORRECTED,
+    STAGE_ORIGINAL,
+    TASK_STATUS_CANCELLED,
+    VERIFICATION_STATUS_OPEN,
+    VERIFICATION_STATUS_STALE,
+    Page,
+    VerificationFlag,
+    VerificationResult,
+)
+from archivestudio.core.project import Project
+from archivestudio.core.tasks.artifacts import (
+    request_artifact,
+    response_artifact,
+    write_task_run_artifact,
+)
+from archivestudio.core.tasks.cancellation import CancellationToken, TaskCancelled
+from archivestudio.core.tasks.registry import get_task_definition
+from archivestudio.core.tasks.runs import (
+    ProgressCallback,
+    TaskProgress,
+    TaskRunSummary,
+    chunked,
+    complete_task_run,
+    create_task_run,
+    emit_progress,
+    final_status,
+    mark_task_run_cancelled,
+    mark_task_run_failed_after_crash,
+)
+from archivestudio.core.tasks.text_versions import get_current_text_version
+from archivestudio.core.tasks.types import TASK_VERIFY, TaskPreset
+from archivestudio.core.verification import diff_transcriptions
+
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _VerificationTargetPage:
+    id: str
+    sequence: int
+    image_path: str
+    source_type: str | None
+    source_text: str
+    source_text_version_id: str
+    source_stage: str
+
+
+def run_verification(
+    project: Project,
+    provider: AIProvider,
+    preset: TaskPreset,
+    *,
+    page_ids: Sequence[str] | None = None,
+    page_sequences: Sequence[int] | None = None,
+    source_stage: str | None = None,
+    skip_existing: bool = False,
+    progress_callback: ProgressCallback | None = None,
+    cancellation_token: CancellationToken | None = None,
+) -> TaskRunSummary:
+    """Run independent transcription verification for selected pages."""
+    if preset.task_type != TASK_VERIFY:
+        raise ValueError(f"Preset {preset.name!r} is not a verification preset")
+
+    definition = get_task_definition(TASK_VERIFY)
+    target_pages = _load_target_pages(
+        project,
+        page_ids=page_ids,
+        page_sequences=page_sequences,
+        source_stage=source_stage,
+        skip_existing=skip_existing,
+    )
+    if not target_pages:
+        raise ValueError("No pages matched the verification request")
+
+    task_run_id = create_task_run(
+        project,
+        preset_name=preset.name,
+        task_type=definition.task_type,
+        model_id=f"{provider.provider_name}:{provider.model_id}",
+        pages_requested=len(target_pages),
+    )
+
+    errors: list[str] = []
+    artifact_requests: list[dict[str, object]] = []
+    artifact_responses: list[dict[str, object]] = []
+    pages_completed = 0
+    pages_failed = 0
+
+    try:
+        _emit_task_progress(
+            progress_callback,
+            preset=preset,
+            total=len(target_pages),
+            completed=pages_completed,
+            failed=pages_failed,
+            message="Starting verification",
+        )
+
+        batch_size = max(1, preset.batch_size)
+        if not provider.supports_batching:
+            batch_size = 1
+        if preset.model_config.max_batch_pages > 0:
+            batch_size = min(batch_size, preset.model_config.max_batch_pages)
+
+        for batch in chunked(target_pages, batch_size):
+            if cancellation_token is not None:
+                cancellation_token.raise_if_cancelled()
+            current_pages = tuple(page.sequence for page in batch)
+            _emit_task_progress(
+                progress_callback,
+                preset=preset,
+                total=len(target_pages),
+                completed=pages_completed,
+                failed=pages_failed,
+                current_pages=current_pages,
+                message="Sending verification request",
+            )
+
+            requests: list[TranscriptionRequest] = []
+            target_by_page_id = {page.id: page for page in batch}
+            missing_images = 0
+            for page in batch:
+                absolute_image_path = project.root / page.image_path
+                if not absolute_image_path.exists():
+                    message = f"Missing page image for page {page.sequence}: {absolute_image_path}"
+                    errors.append(message)
+                    log.error(message)
+                    missing_images += 1
+                    continue
+
+                prompt = _render_prompt(page, preset)
+                request = TranscriptionRequest(
+                    page_id=page.id,
+                    page_sequence=page.sequence,
+                    image_path=absolute_image_path,
+                    source_type=page.source_type,
+                    prompt=prompt,
+                )
+                requests.append(request)
+                artifact_requests.append(
+                    request_artifact(
+                        request,
+                        prompt_system=prompt.system,
+                        prompt_user=prompt.user,
+                        source_text_stage=page.source_stage,
+                        source_text_version_id=page.source_text_version_id,
+                    )
+                )
+
+            if missing_images:
+                pages_failed += missing_images
+                _emit_task_progress(
+                    progress_callback,
+                    preset=preset,
+                    total=len(target_pages),
+                    completed=pages_completed,
+                    failed=pages_failed,
+                    current_pages=current_pages,
+                    message="Missing image",
+                )
+            if not requests:
+                continue
+
+            try:
+                results = provider.transcribe_pages(requests, model_config=preset.model_config)
+            except Exception as exc:  # pragma: no cover - exercised by provider error tests
+                if cancellation_token is not None and cancellation_token.is_cancelled:
+                    raise TaskCancelled() from exc
+                report = classify_exception(exc)
+                log.exception(
+                    "Verification batch failed for pages %s [%s]: %s",
+                    [page.sequence for page in batch],
+                    report.category,
+                    report.summary,
+                )
+                pages_failed += len(requests)
+                errors.append(f"{report.category}: {report.summary} {report.suggestion}")
+                _emit_task_progress(
+                    progress_callback,
+                    preset=preset,
+                    total=len(target_pages),
+                    completed=pages_completed,
+                    failed=pages_failed,
+                    current_pages=current_pages,
+                    message="Verification request failed",
+                )
+                continue
+
+            result_map = {result.page_id: result for result in results}
+            with project.session() as session:
+                for request in requests:
+                    result = result_map.get(request.page_id)
+                    target = target_by_page_id[request.page_id]
+                    if result is None:
+                        message = f"Provider returned no verification result for page {request.page_sequence}"
+                        errors.append(message)
+                        log.error(message)
+                        pages_failed += 1
+                        _emit_task_progress(
+                            progress_callback,
+                            preset=preset,
+                            total=len(target_pages),
+                            completed=pages_completed,
+                            failed=pages_failed,
+                            current_pages=(request.page_sequence,),
+                            message="No provider result",
+                        )
+                        continue
+
+                    verifier_text = _normalize_response_text(
+                        result.transcription,
+                        preset.response_prefix,
+                    )
+                    alignment = diff_transcriptions(target.source_text, verifier_text)
+                    verification_result = VerificationResult(
+                        page_id=request.page_id,
+                        source_text_version_id=target.source_text_version_id,
+                        task_run_id=task_run_id,
+                        source_stage=target.source_stage,
+                        verifier_text=verifier_text,
+                        alignment_status=alignment.status,
+                        alignment_message=alignment.message,
+                    )
+                    session.add(verification_result)
+                    session.flush()
+                    _mark_previous_open_flags_stale(
+                        session,
+                        page_id=request.page_id,
+                        source_text_version_id=target.source_text_version_id,
+                        current_result_id=verification_result.id,
+                    )
+                    for diff in alignment.flags:
+                        session.add(
+                            VerificationFlag(
+                                verification_result_id=verification_result.id,
+                                page_id=request.page_id,
+                                source_text_version_id=target.source_text_version_id,
+                                primary_start=diff.primary_start,
+                                primary_end=diff.primary_end,
+                                primary_text=diff.primary_text,
+                                alternative_text=diff.alternative_text,
+                                flag_type=diff.flag_type,
+                                status=VERIFICATION_STATUS_OPEN,
+                            )
+                        )
+
+                    artifact_responses.append(
+                        response_artifact(
+                            page_id=request.page_id,
+                            page_sequence=request.page_sequence,
+                            output_text=verifier_text,
+                            raw_response=result.raw_response,
+                        )
+                    )
+                    pages_completed += 1
+                    _emit_task_progress(
+                        progress_callback,
+                        preset=preset,
+                        total=len(target_pages),
+                        completed=pages_completed,
+                        failed=pages_failed,
+                        current_pages=(request.page_sequence,),
+                        message="Verification saved",
+                    )
+            if cancellation_token is not None:
+                cancellation_token.raise_if_cancelled()
+
+        status = final_status(pages_completed, pages_failed)
+        complete_task_run(
+            project,
+            task_run_id=task_run_id,
+            status=status,
+            pages_completed=pages_completed,
+            pages_failed=pages_failed,
+            error_message="\n".join(errors) if errors else None,
+        )
+        try:
+            write_task_run_artifact(
+                project,
+                task_run_id=task_run_id,
+                task_type=definition.task_type,
+                provider_name=provider.provider_name,
+                model_id=provider.model_id,
+                preset=preset,
+                requests=artifact_requests,
+                responses=artifact_responses,
+                errors=errors,
+            )
+        except Exception:
+            log.warning("Could not write verification task artifact %s", task_run_id, exc_info=True)
+        return TaskRunSummary(
+            task_run_id=task_run_id,
+            task_type=definition.task_type,
+            preset_name=preset.name,
+            pages_requested=len(target_pages),
+            pages_completed=pages_completed,
+            pages_failed=pages_failed,
+            status=status,
+            created_text_version_ids=[],
+            errors=errors,
+        )
+    except TaskCancelled as exc:
+        errors.append(str(exc))
+        mark_task_run_cancelled(
+            project,
+            task_run_id=task_run_id,
+            pages_completed=pages_completed,
+            pages_failed=pages_failed,
+        )
+        return TaskRunSummary(
+            task_run_id=task_run_id,
+            task_type=definition.task_type,
+            preset_name=preset.name,
+            pages_requested=len(target_pages),
+            pages_completed=pages_completed,
+            pages_failed=pages_failed,
+            status=TASK_STATUS_CANCELLED,
+            created_text_version_ids=[],
+            errors=errors,
+        )
+    except Exception as exc:
+        mark_task_run_failed_after_crash(
+            project,
+            task_run_id=task_run_id,
+            pages_requested=len(target_pages),
+            pages_completed=pages_completed,
+            pages_failed=pages_failed,
+            error=exc,
+        )
+        raise
+
+
+def _emit_task_progress(
+    callback: ProgressCallback | None,
+    *,
+    preset: TaskPreset,
+    total: int,
+    completed: int,
+    failed: int,
+    current_pages: tuple[int, ...] = (),
+    message: str = "",
+) -> None:
+    emit_progress(
+        callback,
+        TaskProgress(
+            task_type=TASK_VERIFY,
+            preset_name=preset.name,
+            pages_total=total,
+            pages_completed=completed,
+            pages_failed=failed,
+            current_pages=current_pages,
+            message=message,
+        ),
+    )
+
+
+def _render_prompt(page: _VerificationTargetPage, preset: TaskPreset) -> PromptMessages:
+    structure_rules = _structure_rules_for_preset(preset)
+    custom_instructions = preset.custom_instructions.strip() or "None."
+    user = preset.prompt_template.user_prompt_template.format(
+        page_sequence=page.sequence,
+        source_genre=preset.source_genre,
+        structure_rules=structure_rules,
+        custom_instructions=custom_instructions,
+        text_to_process="",
+    )
+    return PromptMessages(system=preset.prompt_template.system_prompt, user=user)
+
+
+def _structure_rules_for_preset(preset: TaskPreset) -> str:
+    rules = [
+        "- Preserve line breaks." if preset.preserve_line_breaks else "- Normalize line breaks when needed for readability.",
+        "- Preserve marginalia explicitly." if preset.preserve_marginalia else "- Ignore decorative marginal marks unless they carry content.",
+        "- Preserve original spacing and layout cues." if not preset.normalize_whitespace else "- Normalize repeated whitespace while preserving section structure.",
+    ]
+    extra_rules = preset.structure_rules.strip()
+    if extra_rules:
+        rules.append(extra_rules)
+    custom_notes = preset.custom_instructions.strip()
+    if custom_notes:
+        rules.append(custom_notes)
+    return "\n".join(rules)
+
+
+def _normalize_response_text(text: str, response_prefix: str) -> str:
+    cleaned = text.strip()
+    prefix = response_prefix.strip()
+    if not prefix:
+        return cleaned
+    if cleaned.lower().startswith(prefix.lower()):
+        cleaned = cleaned[len(prefix):].lstrip(" \n\r\t:-")
+    return cleaned.strip()
+
+
+def _load_target_pages(
+    project: Project,
+    *,
+    page_ids: Sequence[str] | None,
+    page_sequences: Sequence[int] | None,
+    source_stage: str | None,
+    skip_existing: bool,
+) -> list[_VerificationTargetPage]:
+    with project.session() as session:
+        pages = session.execute(select(Page).order_by(Page.sequence)).scalars().all()
+
+        if page_ids is not None:
+            allowed_ids = set(page_ids)
+            pages = [page for page in pages if page.id in allowed_ids]
+        if page_sequences is not None:
+            allowed_sequences = set(page_sequences)
+            pages = [page for page in pages if page.sequence in allowed_sequences]
+
+        stage_preference = _source_stage_preference(source_stage)
+        selected: list[_VerificationTargetPage] = []
+        for page in pages:
+            source_version = None
+            for stage in stage_preference:
+                source_version = get_current_text_version(session, page_id=page.id, stage=stage)
+                if source_version is not None:
+                    break
+            if source_version is None:
+                continue
+            if skip_existing and session.execute(
+                select(VerificationResult.id).where(
+                    VerificationResult.source_text_version_id == source_version.id,
+                )
+            ).first():
+                continue
+            selected.append(
+                _VerificationTargetPage(
+                    id=page.id,
+                    sequence=page.sequence,
+                    image_path=page.image_path,
+                    source_type=page.source_type,
+                    source_text=source_version.content,
+                    source_text_version_id=source_version.id,
+                    source_stage=source_version.stage,
+                )
+            )
+        return selected
+
+
+def _source_stage_preference(source_stage: str | None) -> tuple[str, ...]:
+    if source_stage == STAGE_ORIGINAL:
+        return (STAGE_ORIGINAL,)
+    if source_stage == STAGE_CORRECTED:
+        return (STAGE_CORRECTED,)
+    return (STAGE_CORRECTED, STAGE_ORIGINAL)
+
+
+def _mark_previous_open_flags_stale(
+    session,
+    *,
+    page_id: str,
+    source_text_version_id: str,
+    current_result_id: str,
+) -> None:
+    flags = session.execute(
+        select(VerificationFlag).where(
+            VerificationFlag.page_id == page_id,
+            VerificationFlag.source_text_version_id == source_text_version_id,
+            VerificationFlag.verification_result_id != current_result_id,
+            VerificationFlag.status == VERIFICATION_STATUS_OPEN,
+        )
+    ).scalars()
+    for flag in flags:
+        flag.status = VERIFICATION_STATUS_STALE
