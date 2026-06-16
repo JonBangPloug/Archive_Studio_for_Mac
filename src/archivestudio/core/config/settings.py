@@ -44,6 +44,7 @@ auto_open_last_work = false
 last_import_dir = ""
 workspace_layout = "stacked"
 pages_pane_visible = true
+write_task_checkpoints = true
 main_splitter_sizes = [320, 1000]
 stacked_workspace_sizes = [520, 320]
 side_by_side_workspace_sizes = [700, 500]
@@ -76,6 +77,7 @@ class AppSettings:
     last_import_dir: str = ""
     workspace_layout: str = "stacked"
     pages_pane_visible: bool = True
+    write_task_checkpoints: bool = True
     main_splitter_sizes: tuple[int, ...] = ()
     stacked_workspace_sizes: tuple[int, ...] = ()
     side_by_side_workspace_sizes: tuple[int, ...] = ()
@@ -122,6 +124,7 @@ def load_app_settings() -> AppSettings:
         last_import_dir=str(app.get("last_import_dir", "")),
         workspace_layout=_workspace_layout(str(app.get("workspace_layout", "stacked"))),
         pages_pane_visible=bool(app.get("pages_pane_visible", True)),
+        write_task_checkpoints=bool(app.get("write_task_checkpoints", True)),
         main_splitter_sizes=_int_tuple(app.get("main_splitter_sizes", (320, 1000))),
         stacked_workspace_sizes=_int_tuple(app.get("stacked_workspace_sizes", (520, 320))),
         side_by_side_workspace_sizes=_int_tuple(
@@ -210,6 +213,7 @@ def _render_settings_toml(settings: AppSettings) -> str:
         f'last_import_dir = "{_escape_toml_string(settings.last_import_dir)}"',
         f'workspace_layout = "{_escape_toml_string(_workspace_layout(settings.workspace_layout))}"',
         f"pages_pane_visible = {_bool_literal(settings.pages_pane_visible)}",
+        f"write_task_checkpoints = {_bool_literal(settings.write_task_checkpoints)}",
         f"main_splitter_sizes = {_int_array_literal(settings.main_splitter_sizes)}",
         f"stacked_workspace_sizes = {_int_array_literal(settings.stacked_workspace_sizes)}",
         f"side_by_side_workspace_sizes = {_int_array_literal(settings.side_by_side_workspace_sizes)}",

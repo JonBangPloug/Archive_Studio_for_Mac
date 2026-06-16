@@ -329,7 +329,7 @@ _BUILTIN_PRESETS = {
         source_genre="handwritten text",
         prompt_template=_HANDWRITTEN_CORRECTION_PROMPT,
         model_config=_TRANSCRIPTION_BASE_MODEL,
-        batch_size=2,
+        batch_size=1,
         preserve_line_breaks=True,
         preserve_marginalia=True,
         normalize_whitespace=False,
@@ -340,7 +340,7 @@ _BUILTIN_PRESETS = {
         source_genre="printed text",
         prompt_template=_PRINTED_CORRECTION_PROMPT,
         model_config=_TRANSCRIPTION_BASE_MODEL,
-        batch_size=3,
+        batch_size=1,
         preserve_line_breaks=True,
         preserve_marginalia=False,
         normalize_whitespace=False,
@@ -351,7 +351,7 @@ _BUILTIN_PRESETS = {
         source_genre="catalogue / structured listings",
         prompt_template=_CATALOGUE_CORRECTION_PROMPT,
         model_config=_TRANSCRIPTION_BASE_MODEL,
-        batch_size=2,
+        batch_size=1,
         preserve_line_breaks=True,
         preserve_marginalia=False,
         normalize_whitespace=False,
@@ -362,7 +362,7 @@ _BUILTIN_PRESETS = {
         source_genre="custom / other source",
         prompt_template=_CUSTOM_CORRECTION_PROMPT,
         model_config=_TRANSCRIPTION_BASE_MODEL,
-        batch_size=2,
+        batch_size=1,
         preserve_line_breaks=True,
         preserve_marginalia=True,
         normalize_whitespace=False,
@@ -373,7 +373,7 @@ _BUILTIN_PRESETS = {
         source_genre="general historical text",
         prompt_template=_SCHOLARLY_TRANSLATION_PROMPT,
         model_config=_TRANSCRIPTION_BASE_MODEL,
-        batch_size=2,
+        batch_size=1,
         preserve_line_breaks=True,
         preserve_marginalia=True,
         normalize_whitespace=False,
@@ -433,7 +433,6 @@ def get_preset(name: str) -> TaskPreset:
             system_prompt=override.system_prompt,
             user_prompt_template=override.user_prompt_template,
         ),
-        batch_size=override.batch_size or preset.batch_size,
         preserve_line_breaks=(
             override.preserve_line_breaks
             if override.preserve_line_breaks is not None
@@ -500,7 +499,6 @@ def list_presets() -> list[TaskPreset]:
                     system_prompt=override.system_prompt,
                     user_prompt_template=override.user_prompt_template,
                 ),
-                batch_size=override.batch_size or preset.batch_size,
                 preserve_line_breaks=(
                     override.preserve_line_breaks
                     if override.preserve_line_breaks is not None

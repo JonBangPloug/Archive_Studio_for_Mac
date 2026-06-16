@@ -23,6 +23,11 @@ from archivestudio.core.tasks.artifacts import (
     response_artifact,
     write_task_run_artifact,
 )
+from archivestudio.core.tasks.checkpoints import (
+    CheckpointWriteError,
+    write_completed_checkpoint,
+    write_failed_checkpoint_record,
+)
 from archivestudio.core.tasks.registry import get_task_definition
 from archivestudio.core.tasks.runs import (
     ProgressCallback,
@@ -64,6 +69,7 @@ def run_translation(
     skip_existing: bool = False,
     progress_callback: ProgressCallback | None = None,
     cancellation_token: CancellationToken | None = None,
+    write_checkpoints: bool = True,
 ) -> TaskRunSummary:
     """Run translation for selected pages into the translated text stage."""
     if preset.task_type != TASK_TRANSLATE:
@@ -164,6 +170,17 @@ def run_translation(
                 )
                 pages_failed += len(requests)
                 errors.append(f"{report.category}: {report.summary} {report.suggestion}")
+                for request in requests:
+                    _record_failed_checkpoint(
+                        project,
+                        page_sequence=request.page_sequence,
+                        page_id=request.page_id,
+                        stage=definition.output_stage,
+                        provider=provider,
+                        error_message=f"{report.category}: {report.summary}",
+                        enabled=write_checkpoints,
+                        errors=errors,
+                    )
                 _emit_task_progress(
                     progress_callback,
                     preset=preset,
@@ -176,44 +193,23 @@ def run_translation(
                 continue
 
             result_map = {result.page_id: result for result in results}
-            with project.session() as session:
-                for request in requests:
-                    result = result_map.get(request.page_id)
-                    if result is None:
-                        message = f"Provider returned no translation result for page {request.page_sequence}"
-                        errors.append(message)
-                        log.error(message)
-                        pages_failed += 1
-                        _emit_task_progress(
-                            progress_callback,
-                            preset=preset,
-                            total=len(target_pages),
-                            completed=pages_completed,
-                            failed=pages_failed,
-                            current_pages=(request.page_sequence,),
-                            message="No provider result",
-                        )
-                        continue
-                    artifact_responses.append(
-                        response_artifact(
-                            page_id=request.page_id,
-                            page_sequence=request.page_sequence,
-                            output_text=result.translated_text,
-                            raw_response=result.raw_response,
-                        )
-                    )
-
-                    text_version = replace_current_text_version(
-                        session,
+            for request in requests:
+                result = result_map.get(request.page_id)
+                if result is None:
+                    message = f"Provider returned no translation result for page {request.page_sequence}"
+                    errors.append(message)
+                    log.error(message)
+                    pages_failed += 1
+                    _record_failed_checkpoint(
+                        project,
+                        page_sequence=request.page_sequence,
                         page_id=request.page_id,
                         stage=definition.output_stage,
-                        content=_normalize_response_text(result.translated_text, preset.response_prefix),
-                        created_by=f"ai:{provider.provider_name}:{provider.model_id}",
-                        task_run_id=task_run_id,
-                        source_version_id=request.source_text_version_id,
+                        provider=provider,
+                        error_message=message,
+                        enabled=write_checkpoints,
+                        errors=errors,
                     )
-                    created_text_version_ids.append(text_version.id)
-                    pages_completed += 1
                     _emit_task_progress(
                         progress_callback,
                         preset=preset,
@@ -221,8 +217,52 @@ def run_translation(
                         completed=pages_completed,
                         failed=pages_failed,
                         current_pages=(request.page_sequence,),
-                        message="Translation saved",
+                        message="No provider result",
                     )
+                    continue
+                artifact_responses.append(
+                    response_artifact(
+                        page_id=request.page_id,
+                        page_sequence=request.page_sequence,
+                        output_text=result.translated_text,
+                        raw_response=result.raw_response,
+                    )
+                )
+
+                content = _normalize_response_text(result.translated_text, preset.response_prefix)
+                with project.session() as session:
+                    text_version = replace_current_text_version(
+                        session,
+                        page_id=request.page_id,
+                        stage=definition.output_stage,
+                        content=content,
+                        created_by=f"ai:{provider.provider_name}:{provider.model_id}",
+                        task_run_id=task_run_id,
+                        source_version_id=request.source_text_version_id,
+                    )
+                    text_version_id = text_version.id
+                created_text_version_ids.append(text_version_id)
+                _write_completed_checkpoint(
+                    project,
+                    page_sequence=request.page_sequence,
+                    page_id=request.page_id,
+                    stage=definition.output_stage,
+                    content=content,
+                    provider=provider,
+                    text_version_id=text_version_id,
+                    enabled=write_checkpoints,
+                    errors=errors,
+                )
+                pages_completed += 1
+                _emit_task_progress(
+                    progress_callback,
+                    preset=preset,
+                    total=len(target_pages),
+                    completed=pages_completed,
+                    failed=pages_failed,
+                    current_pages=(request.page_sequence,),
+                    message="Translation saved",
+                )
             if cancellation_token is not None:
                 cancellation_token.raise_if_cancelled()
 
@@ -351,6 +391,69 @@ def _normalize_response_text(text: str, response_prefix: str) -> str:
     if cleaned.lower().startswith(prefix.lower()):
         cleaned = cleaned[len(prefix):].lstrip(" \n\r\t:-")
     return cleaned.strip()
+
+
+def _write_completed_checkpoint(
+    project: Project,
+    *,
+    page_sequence: int,
+    page_id: str,
+    stage: str,
+    content: str,
+    provider: AIProvider,
+    text_version_id: str,
+    enabled: bool,
+    errors: list[str],
+) -> None:
+    try:
+        path = write_completed_checkpoint(
+            project,
+            page_sequence=page_sequence,
+            page_id=page_id,
+            stage=stage,
+            content=content,
+            provider=provider.provider_name,
+            model=provider.model_id,
+            text_version_id=text_version_id,
+            enabled=enabled,
+        )
+    except CheckpointWriteError as exc:
+        _append_checkpoint_warning(errors, exc)
+        return
+    if path is not None:
+        log.info("Wrote translation checkpoint for page %s to %s", page_sequence, path)
+
+
+def _record_failed_checkpoint(
+    project: Project,
+    *,
+    page_sequence: int,
+    page_id: str,
+    stage: str,
+    provider: AIProvider,
+    error_message: str,
+    enabled: bool,
+    errors: list[str],
+) -> None:
+    try:
+        write_failed_checkpoint_record(
+            project,
+            page_sequence=page_sequence,
+            page_id=page_id,
+            stage=stage,
+            provider=provider.provider_name,
+            model=provider.model_id,
+            error_message=error_message,
+            enabled=enabled,
+        )
+    except CheckpointWriteError as exc:
+        _append_checkpoint_warning(errors, exc)
+
+
+def _append_checkpoint_warning(errors: list[str], exc: CheckpointWriteError) -> None:
+    message = f"Checkpoint warning: {exc}"
+    errors.append(message)
+    log.warning(message)
 
 
 def _load_target_pages(

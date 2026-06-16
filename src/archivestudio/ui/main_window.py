@@ -2097,6 +2097,7 @@ class MainWindow(QMainWindow):
                 page_ids=launch.page_ids,
                 progress_callback=self._background_tasks.report_progress,
                 cancellation_token=token,
+                write_checkpoints=launch.write_checkpoints,
             )
         elif task_type == TASK_CORRECT:
             runner = lambda token: run_correction(
@@ -2106,6 +2107,7 @@ class MainWindow(QMainWindow):
                 page_ids=launch.page_ids,
                 progress_callback=self._background_tasks.report_progress,
                 cancellation_token=token,
+                write_checkpoints=launch.write_checkpoints,
             )
         elif task_type == TASK_TRANSLATE:
             runner = lambda token: run_translation(
@@ -2115,6 +2117,7 @@ class MainWindow(QMainWindow):
                 page_ids=launch.page_ids,
                 progress_callback=self._background_tasks.report_progress,
                 cancellation_token=token,
+                write_checkpoints=launch.write_checkpoints,
             )
         elif task_type == TASK_VERIFY:
             source_stage = self._current_stage if self._current_stage in {"original", "corrected"} else None
@@ -2140,7 +2143,8 @@ class MainWindow(QMainWindow):
             (
                 f"Running {task_type} with {prefix} '{launch.preset_name}' "
                 f"on {launch.scope_label} using {provider.provider_name}:{provider.model_id}"
-                f"{self._pages_per_call_status_suffix(launch)}..."
+                f"{self._pages_per_call_status_suffix(launch)}"
+                f"{self._checkpoint_status_suffix(launch)}..."
             ),
             0,
         )
@@ -2149,7 +2153,7 @@ class MainWindow(QMainWindow):
         self._start_two_step_transcribe_correction_workflow(
             workflow_name=HANDWRITTEN_HTR_CORRECTION_WORKFLOW,
             preset_name="Handwritten Transcription + Correction",
-            runner_factory=lambda transcription_provider, correction_provider, page_ids, transcription_preset, correction_preset, progress_callback, cancellation_token: run_handwritten_htr_and_correction(
+            runner_factory=lambda transcription_provider, correction_provider, page_ids, transcription_preset, correction_preset, progress_callback, cancellation_token, write_checkpoints: run_handwritten_htr_and_correction(
                 self.project,
                 transcription_provider,
                 page_ids=page_ids,
@@ -2158,6 +2162,7 @@ class MainWindow(QMainWindow):
                 correction_provider=correction_provider,
                 progress_callback=progress_callback,
                 cancellation_token=cancellation_token,
+                write_checkpoints=write_checkpoints,
             ),
             status_label="handwritten transcription + correction",
             transcription_preset_name="Handwritten Transcription",
@@ -2168,7 +2173,7 @@ class MainWindow(QMainWindow):
         self._start_two_step_transcribe_correction_workflow(
             workflow_name=PRINTED_OCR_CORRECTION_WORKFLOW,
             preset_name="Printed Transcription + Correction",
-            runner_factory=lambda transcription_provider, correction_provider, page_ids, transcription_preset, correction_preset, progress_callback, cancellation_token: run_printed_ocr_and_correction(
+            runner_factory=lambda transcription_provider, correction_provider, page_ids, transcription_preset, correction_preset, progress_callback, cancellation_token, write_checkpoints: run_printed_ocr_and_correction(
                 self.project,
                 transcription_provider,
                 page_ids=page_ids,
@@ -2177,6 +2182,7 @@ class MainWindow(QMainWindow):
                 correction_provider=correction_provider,
                 progress_callback=progress_callback,
                 cancellation_token=cancellation_token,
+                write_checkpoints=write_checkpoints,
             ),
             status_label="printed transcription + correction",
             transcription_preset_name="Printed Transcription",
@@ -2188,7 +2194,7 @@ class MainWindow(QMainWindow):
         *,
         workflow_name: str,
         preset_name: str,
-        runner_factory: Callable[[object, object, list[str] | None, object, object, object, object], object],
+        runner_factory: Callable[[object, object, list[str] | None, object, object, object, object, bool], object],
         status_label: str,
         transcription_preset_name: str,
         correction_preset_name: str,
@@ -2278,7 +2284,9 @@ class MainWindow(QMainWindow):
             output_stage="corrected",
             auto_selected_preset=True,
             pages_per_call=pages_per_call,
+            write_checkpoints=load_app_settings().write_task_checkpoints,
         )
+        workflow_write_checkpoints = self._active_task_launch.write_checkpoints
         runner = lambda token: runner_factory(
             transcription_provider,
             correction_provider,
@@ -2287,6 +2295,7 @@ class MainWindow(QMainWindow):
             correction_preset,
             self._background_tasks.report_progress,
             token,
+            workflow_write_checkpoints,
         )
         if not self._launch_background_task(runner):
             self._active_task_launch = None
@@ -2295,7 +2304,8 @@ class MainWindow(QMainWindow):
             (
                 f"Running {status_label} "
                 f"on {scope.scope_label} using {workflow_model_label}"
-                f"{self._pages_per_call_status_suffix(self._active_task_launch)}..."
+                f"{self._pages_per_call_status_suffix(self._active_task_launch)}"
+                f"{self._checkpoint_status_suffix(self._active_task_launch)}..."
             ),
             0,
         )
@@ -2335,6 +2345,7 @@ class MainWindow(QMainWindow):
             auto_selected_preset=auto_selected,
             custom_instructions=custom_instructions,
             pages_per_call=pages_per_call,
+            write_checkpoints=load_app_settings().write_task_checkpoints,
         )
 
     def _load_launch_preset(self, preset_name: str, *, title: str):
@@ -2564,6 +2575,11 @@ class MainWindow(QMainWindow):
         if launch.task_type != TASK_TRANSCRIBE or launch.pages_per_call is None:
             return ""
         return f" (pages per call: {launch.pages_per_call})"
+
+    def _checkpoint_status_suffix(self, launch: TaskLaunch) -> str:
+        if not launch.write_checkpoints:
+            return ""
+        return " (checkpoints: exports/checkpoints)"
 
     def _resolve_preset_name(self, *, task_type: str, page_ids: list[str] | None) -> tuple[str | None, bool]:
         source_types = self._selected_source_types(page_ids)

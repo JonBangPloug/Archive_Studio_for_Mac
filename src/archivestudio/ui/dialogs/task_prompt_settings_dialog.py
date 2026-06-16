@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QFrame,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -18,8 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QScrollArea,
-    QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -78,6 +76,7 @@ class TaskPromptSettingsDialog(QDialog):
         self._current_is_builtin = True
         self._current_model_id = "unset"
         self._current_source_genre = "custom source"
+        self._current_batch_size = 1
         self._loading_form = False
         self._loaded_form_state: tuple[object, ...] | None = None
 
@@ -100,16 +99,20 @@ class TaskPromptSettingsDialog(QDialog):
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        scroll_area = QScrollArea(self)
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        layout.addWidget(scroll_area, 1)
+        self.tabs = QTabWidget(self)
+        layout.addWidget(self.tabs, 1)
 
-        content = QWidget(scroll_area)
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(8, 8, 8, 8)
-        content_layout.setSpacing(14)
-        scroll_area.setWidget(content)
+        instructions_tab = QWidget(self.tabs)
+        instructions_layout = QVBoxLayout(instructions_tab)
+        instructions_layout.setContentsMargins(10, 10, 10, 10)
+        instructions_layout.setSpacing(12)
+        self.tabs.addTab(instructions_tab, "Instructions")
+
+        model_tab = QWidget(self.tabs)
+        model_layout = QVBoxLayout(model_tab)
+        model_layout.setContentsMargins(10, 10, 10, 10)
+        model_layout.setSpacing(12)
+        self.tabs.addTab(model_tab, "Model")
 
         preset_box = QGroupBox("Preset")
         preset_layout = QVBoxLayout(preset_box)
@@ -153,7 +156,7 @@ class TaskPromptSettingsDialog(QDialog):
         action_layout.addWidget(self.reset_preset_button)
         action_layout.addStretch(1)
         preset_layout.addWidget(action_row)
-        content_layout.addWidget(preset_box)
+        instructions_layout.addWidget(preset_box)
 
         task_box = QGroupBox("Task instruction")
         task_layout = QVBoxLayout(task_box)
@@ -166,7 +169,7 @@ class TaskPromptSettingsDialog(QDialog):
             "Example: Transcribe faithfully, preserve spelling and meaningful structure, and do not modernize."
         )
         task_layout.addWidget(self.general_instructions_edit)
-        content_layout.addWidget(task_box)
+        instructions_layout.addWidget(task_box)
 
         source_box = QGroupBox("Source instructions")
         source_layout = QVBoxLayout(source_box)
@@ -195,7 +198,8 @@ class TaskPromptSettingsDialog(QDialog):
         self.preserve_marginalia_checkbox.setVisible(False)
         self.normalize_whitespace_checkbox = QCheckBox("Normalize whitespace", self)
         self.normalize_whitespace_checkbox.setVisible(False)
-        content_layout.addWidget(source_box)
+        instructions_layout.addWidget(source_box)
+        instructions_layout.addStretch(1)
 
         details_box = QGroupBox("Model")
         details_layout = QVBoxLayout(details_box)
@@ -208,8 +212,6 @@ class TaskPromptSettingsDialog(QDialog):
         self.task_type_combo = QComboBox(self)
         for task_type, label in TASK_TYPE_LABELS.items():
             self.task_type_combo.addItem(label, userData=task_type)
-        self.batch_size_spin = QSpinBox(self)
-        self.batch_size_spin.setRange(1, 20)
         self.provider_combo = QComboBox(self)
         for provider, label in PROVIDER_LABELS.items():
             self.provider_combo.addItem(label, userData=provider)
@@ -228,7 +230,6 @@ class TaskPromptSettingsDialog(QDialog):
         self.temperature_edit.setPlaceholderText("Blank = model default")
         self.name_edit.setVisible(False)
         self.task_type_combo.setVisible(False)
-        metadata_form.addRow("Batch size", self.batch_size_spin)
         metadata_form.addRow("Provider", self.provider_combo)
         metadata_form.addRow("Model tier", self.model_tier_combo)
         metadata_form.addRow("", self.provider_resolution_label)
@@ -242,8 +243,8 @@ class TaskPromptSettingsDialog(QDialog):
         temperature_hint.setWordWrap(True)
         details_layout.addWidget(temperature_hint)
 
-        content_layout.addWidget(details_box)
-        content_layout.addStretch(1)
+        model_layout.addWidget(details_box)
+        model_layout.addStretch(1)
 
         # Internal prompt assembly fields. They stay hidden so existing preset
         # storage remains compatible without exposing template mechanics.
@@ -270,7 +271,6 @@ class TaskPromptSettingsDialog(QDialog):
         self.source_genre_edit.textChanged.connect(self._on_form_changed)
         self.structure_rules_edit.textChanged.connect(self._on_form_changed)
         self.custom_instructions_edit.textChanged.connect(self._on_form_changed)
-        self.batch_size_spin.valueChanged.connect(self._on_form_changed)
         self.provider_combo.currentIndexChanged.connect(self._on_form_changed)
         self.provider_combo.currentIndexChanged.connect(self._refresh_resolved_model_label)
         self.model_tier_combo.currentIndexChanged.connect(self._on_form_changed)
@@ -337,10 +337,10 @@ class TaskPromptSettingsDialog(QDialog):
         self.name_edit.setText(preset.name)
         self._set_task_type(preset.task_type)
         self._current_source_genre = preset.source_genre
+        self._current_batch_size = max(1, preset.batch_size)
         self.source_genre_edit.setText(preset.source_genre)
         self.source_notes_edit.setPlainText(self._source_notes_from_preset(preset))
         self.custom_instructions_edit.setPlainText("")
-        self.batch_size_spin.setValue(max(1, preset.batch_size))
         self._set_provider(preset.model_config.provider)
         self._set_model_tier(preset.model_config.model_tier)
         self._current_model_id = preset.model_config.model_id or "unset"
@@ -390,7 +390,7 @@ class TaskPromptSettingsDialog(QDialog):
                 "This is your own preset. Edit task instruction, source instructions, or model settings below."
             )
             self.details_help_label.setText(
-                "Model and runtime details affect how this preset behaves when a task runs."
+                "Model settings affect which provider and model this preset uses. Batch size is chosen when you start a task."
             )
             self.save_button.setText("Save Changes")
         else:
@@ -399,7 +399,7 @@ class TaskPromptSettingsDialog(QDialog):
                 "ArchiveStudio will save your changes as an override."
             )
             self.details_help_label.setText(
-                "Built-in preset names and task types stay fixed, but you can adjust batch size and model settings."
+                "Built-in preset names and task types stay fixed, but you can adjust model settings. Batch size is chosen when you start a task."
             )
             self.save_button.setText("Save Changes")
         self.name_edit.setEnabled(is_user)
@@ -407,7 +407,6 @@ class TaskPromptSettingsDialog(QDialog):
         self.source_genre_edit.setEnabled(True)
         self.structure_rules_edit.setEnabled(True)
         self.custom_instructions_edit.setEnabled(True)
-        self.batch_size_spin.setEnabled(True)
         self.preserve_line_breaks_checkbox.setEnabled(True)
         self.preserve_marginalia_checkbox.setEnabled(True)
         self.normalize_whitespace_checkbox.setEnabled(True)
@@ -442,7 +441,6 @@ class TaskPromptSettingsDialog(QDialog):
                 and stored.user_prompt_template == builtin.prompt_template.user_prompt_template
                 and stored.response_prefix == builtin.response_prefix
                 and stored.source_genre == builtin.source_genre
-                and stored.batch_size == builtin.batch_size
                 and stored.preserve_line_breaks == builtin.preserve_line_breaks
                 and stored.preserve_marginalia == builtin.preserve_marginalia
                 and stored.normalize_whitespace == builtin.normalize_whitespace
@@ -460,7 +458,6 @@ class TaskPromptSettingsDialog(QDialog):
                     user_prompt_template=stored.user_prompt_template,
                     response_prefix=stored.response_prefix,
                     source_genre=stored.source_genre,
-                    batch_size=stored.batch_size,
                     preserve_line_breaks=stored.preserve_line_breaks,
                     preserve_marginalia=stored.preserve_marginalia,
                     normalize_whitespace=stored.normalize_whitespace,
@@ -548,7 +545,7 @@ class TaskPromptSettingsDialog(QDialog):
             system_prompt=system_prompt,
             user_prompt_template=user_prompt_template,
             response_prefix=response_prefix,
-            batch_size=self.batch_size_spin.value(),
+            batch_size=max(1, self._current_batch_size),
             preserve_line_breaks=self.preserve_line_breaks_checkbox.isChecked(),
             preserve_marginalia=self.preserve_marginalia_checkbox.isChecked(),
             normalize_whitespace=self.normalize_whitespace_checkbox.isChecked(),
@@ -818,7 +815,6 @@ class TaskPromptSettingsDialog(QDialog):
             self.task_type_combo.currentData(),
             self.source_genre_edit.text(),
             self.source_notes_edit.toPlainText(),
-            self.batch_size_spin.value(),
             self.provider_combo.currentData(),
             self.model_tier_combo.currentData(),
             self.temperature_edit.text(),

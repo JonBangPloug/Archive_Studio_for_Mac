@@ -47,6 +47,7 @@ class SettingsDialog(QDialog):
             last_import_dir=self._settings.last_import_dir,
             workspace_layout=self._settings.workspace_layout,
             pages_pane_visible=self._settings.pages_pane_visible,
+            write_task_checkpoints=self.write_task_checkpoints_checkbox.isChecked(),
             main_splitter_sizes=self._settings.main_splitter_sizes,
             stacked_workspace_sizes=self._settings.stacked_workspace_sizes,
             side_by_side_workspace_sizes=self._settings.side_by_side_workspace_sizes,
@@ -97,8 +98,15 @@ class SettingsDialog(QDialog):
         self.default_provider_combo.addItem("Anthropic", userData="anthropic")
         self.default_provider_combo.addItem("Google Gemini", userData="google")
         self.auto_open_last_work_checkbox = QCheckBox("Auto-open last work on launch", self)
+        self.write_task_checkpoints_checkbox = QCheckBox(
+            "Write per-page checkpoint files during text tasks", self
+        )
+        self.write_task_checkpoints_checkbox.setToolTip(
+            "Stores one .txt file per completed page in exports/checkpoints for recovery."
+        )
         app_form.addRow("LLM used for tasks", self.default_provider_combo)
         app_form.addRow("", self.auto_open_last_work_checkbox)
+        app_form.addRow("", self.write_task_checkpoints_checkbox)
         layout.addWidget(app_box)
 
         providers_box = QGroupBox("Providers")
@@ -126,6 +134,7 @@ class SettingsDialog(QDialog):
             index = self._first_enabled_provider_index(settings)
         self.default_provider_combo.setCurrentIndex(max(0, index))
         self.auto_open_last_work_checkbox.setChecked(settings.auto_open_last_work)
+        self.write_task_checkpoints_checkbox.setChecked(settings.write_task_checkpoints)
         self._load_provider_row(self.openai_row, settings.openai)
         self._load_provider_row(self.anthropic_row, settings.anthropic)
         self._load_provider_row(self.google_row, settings.google)

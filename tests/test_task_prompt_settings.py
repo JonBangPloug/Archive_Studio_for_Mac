@@ -86,7 +86,7 @@ def test_preset_override_loads_and_applies(monkeypatch, tmp_path: Path) -> None:
     assert preset.prompt_template.user_prompt_template.endswith("{text_to_process}")
     assert preset.response_prefix == "Corrected Transcript:"
     assert preset.source_genre == "Latin printed text"
-    assert preset.batch_size == 4
+    assert preset.batch_size == get_builtin_preset("Printed Correction").batch_size
     assert preset.preserve_line_breaks is False
     assert preset.preserve_marginalia is True
     assert preset.normalize_whitespace is True
@@ -262,11 +262,10 @@ def test_prompt_dialog_builtin_details_can_be_saved_as_override(monkeypatch, qtb
     index = dialog._find_preset_index("Handwritten Transcription")
     dialog.preset_combo.setCurrentIndex(index)
 
-    assert dialog.batch_size_spin.isEnabled() is True
+    assert not hasattr(dialog, "batch_size_spin")
     assert dialog.general_instructions_edit.isEnabled() is True
     assert dialog.source_notes_edit.isEnabled() is True
 
-    dialog.batch_size_spin.setValue(4)
     task_instruction = "Correct Latin manuscript text conservatively against the image."
     dialog.general_instructions_edit.setPlainText(task_instruction)
     source_notes = (
@@ -282,7 +281,7 @@ def test_prompt_dialog_builtin_details_can_be_saved_as_override(monkeypatch, qtb
     assert dialog._save_current_preset() is True
 
     saved = load_preset_overrides()["Handwritten Transcription"]
-    assert saved.batch_size == 4
+    assert saved.batch_size is None
     assert saved.system_prompt == task_instruction
     assert saved.structure_rules == source_notes
     assert saved.custom_instructions == ""
@@ -308,7 +307,9 @@ def test_prompt_dialog_exposes_only_user_facing_prompt_fields(qtbot) -> None:
     dialog = TaskPromptSettingsDialog()
     qtbot.addWidget(dialog)
 
-    assert not hasattr(dialog, "prompt_tabs")
+    assert dialog.tabs.count() == 2
+    assert dialog.tabs.tabText(0) == "Instructions"
+    assert dialog.tabs.tabText(1) == "Model"
     assert dialog.general_instructions_edit.isHidden() is False
     assert dialog.source_notes_edit.isHidden() is False
     assert dialog.detailed_instructions_edit.isHidden() is True

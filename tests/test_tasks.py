@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -40,6 +41,7 @@ from archivestudio.core.tasks import (
     run_translation,
     run_verification,
 )
+import archivestudio.core.tasks.checkpoints as checkpoints
 from archivestudio.core.tasks.artifacts import task_run_artifact_path
 from archivestudio.core.tasks.cancellation import CancellationToken
 from archivestudio.core.tasks.runs import TaskProgress
@@ -93,12 +95,28 @@ class FakeTranscriptionProvider(AIProvider):
         ]
 
 
+class MissingSecondTranscriptionProvider(FakeTranscriptionProvider):
+    def transcribe_pages(self, requests, *, model_config):
+        results = super().transcribe_pages(requests, model_config=model_config)
+        return results[:1]
+
+
 def _build_source_images(folder: Path, count: int) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     for idx in range(1, count + 1):
         Image.new("RGB", (60, 40), color=(idx * 20, idx * 10, idx * 5)).save(
             folder / f"page{idx}.png"
         )
+
+
+def _checkpoint_path(project, stage: str, page_sequence: int) -> Path:
+    return project.exports_dir / "checkpoints" / stage / f"page_{page_sequence:06d}.txt"
+
+
+def _manifest_rows(project, stage: str) -> list[dict[str, str]]:
+    path = project.exports_dir / "checkpoints" / stage / "manifest.csv"
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
 
 
 def test_run_transcription_creates_task_run_and_text_versions(tmp_path: Path) -> None:
@@ -162,6 +180,14 @@ def test_run_transcription_creates_task_run_and_text_versions(tmp_path: Path) ->
             "page 2 run-1",
             "page 3 run-2",
         ]
+        assert _checkpoint_path(project, STAGE_ORIGINAL, 1).read_text(encoding="utf-8") == "page 1 run-1"
+        assert _checkpoint_path(project, STAGE_ORIGINAL, 2).read_text(encoding="utf-8") == "page 2 run-1"
+        assert _checkpoint_path(project, STAGE_ORIGINAL, 3).read_text(encoding="utf-8") == "page 3 run-2"
+        manifest_rows = _manifest_rows(project, STAGE_ORIGINAL)
+        assert [row["status"] for row in manifest_rows] == ["completed", "completed", "completed"]
+        assert manifest_rows[0]["output_filename"] == "page_000001.txt"
+        assert manifest_rows[0]["provider"] == "fake"
+        assert manifest_rows[0]["model"] == "test-model"
 
         artifact = json.loads(
             task_run_artifact_path(project, summary.task_run_id).read_text(encoding="utf-8")
@@ -244,6 +270,14 @@ def test_run_transcription_replaces_current_original_and_links_source_version(tm
         assert versions[1].source_version_id == versions[0].id
         assert versions[1].task_run_id == second.task_run_id
         assert versions[1].content == "page 1 run-2"
+        assert _checkpoint_path(project, STAGE_ORIGINAL, 1).read_text(encoding="utf-8") == "page 1 run-2"
+        manifest_rows = [
+            row
+            for row in _manifest_rows(project, STAGE_ORIGINAL)
+            if row["status"] == "completed"
+        ]
+        assert len(manifest_rows) == 1
+        assert manifest_rows[0]["text_version_id"] == versions[1].id
     finally:
         project.close()
 
@@ -299,6 +333,8 @@ def test_run_correction_creates_corrected_text_linked_to_original(tmp_path: Path
         assert corrected_versions[1].content == "corrected::page 2 run-1"
         assert corrected_versions[0].source_version_id == originals[pages[0].id].id
         assert corrected_versions[1].source_version_id == originals[pages[1].id].id
+        assert _checkpoint_path(project, STAGE_CORRECTED, 1).read_text(encoding="utf-8") == "corrected::page 1 run-1"
+        assert _checkpoint_path(project, STAGE_CORRECTED, 2).read_text(encoding="utf-8") == "corrected::page 2 run-1"
     finally:
         project.close()
 
@@ -346,6 +382,94 @@ def test_run_translation_falls_back_to_corrected_text(tmp_path: Path) -> None:
 
         assert translated.source_version_id == corrected.id
         assert "::corrected::" in translated.content
+        assert _checkpoint_path(project, STAGE_TRANSLATED, 1).read_text(encoding="utf-8") == translated.content
+    finally:
+        project.close()
+
+
+def test_checkpoint_writing_can_be_disabled(tmp_path: Path) -> None:
+    project = create_project(tmp_path / "project", name="No Checkpoints")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=1)
+    import_image_folder(project, source_dir, source_type="handwritten")
+
+    provider = FakeTranscriptionProvider()
+
+    try:
+        summary = run_transcription(
+            project,
+            provider,
+            replace(get_builtin_preset("Handwritten Transcription"), batch_size=1),
+            write_checkpoints=False,
+        )
+
+        assert summary.status == TASK_STATUS_COMPLETED
+        assert not (project.exports_dir / "checkpoints").exists()
+        with project.session() as session:
+            assert session.execute(select(TextVersion)).scalar_one().content == "page 1 run-1"
+    finally:
+        project.close()
+
+
+def test_later_page_failure_keeps_earlier_checkpoint_and_records_manifest(
+    tmp_path: Path,
+) -> None:
+    project = create_project(tmp_path / "project", name="Partial Checkpoints")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=2)
+    import_image_folder(project, source_dir, source_type="handwritten")
+
+    provider = MissingSecondTranscriptionProvider()
+
+    try:
+        summary = run_transcription(
+            project,
+            provider,
+            replace(get_builtin_preset("Handwritten Transcription"), batch_size=2),
+        )
+
+        assert summary.pages_completed == 1
+        assert summary.pages_failed == 1
+        assert _checkpoint_path(project, STAGE_ORIGINAL, 1).read_text(encoding="utf-8") == "page 1 run-1"
+        assert not _checkpoint_path(project, STAGE_ORIGINAL, 2).exists()
+        rows = _manifest_rows(project, STAGE_ORIGINAL)
+        assert [row["status"] for row in rows] == ["completed", "failed"]
+        assert rows[1]["page_sequence"] == "2"
+        assert "Provider returned no result" in rows[1]["error_message"]
+    finally:
+        project.close()
+
+
+def test_checkpoint_failure_does_not_roll_back_saved_text_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = create_project(tmp_path / "project", name="Checkpoint Failure")
+    source_dir = tmp_path / "images"
+    _build_source_images(source_dir, count=1)
+    import_image_folder(project, source_dir, source_type="handwritten")
+
+    provider = FakeTranscriptionProvider()
+
+    def fail_atomic_write(path: Path, content: str) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(checkpoints, "_atomic_write_text", fail_atomic_write)
+
+    try:
+        summary = run_transcription(
+            project,
+            provider,
+            replace(get_builtin_preset("Handwritten Transcription"), batch_size=1),
+        )
+
+        assert summary.status == TASK_STATUS_COMPLETED
+        assert summary.pages_completed == 1
+        assert any("Checkpoint warning" in error for error in summary.errors)
+        with project.session() as session:
+            text_version = session.execute(select(TextVersion)).scalar_one()
+        assert text_version.content == "page 1 run-1"
+        assert text_version.is_current is True
     finally:
         project.close()
 

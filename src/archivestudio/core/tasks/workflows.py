@@ -48,6 +48,7 @@ def run_handwritten_htr_and_correction(
     correction_provider: AIProvider | None = None,
     progress_callback: ProgressCallback | None = None,
     cancellation_token: CancellationToken | None = None,
+    write_checkpoints: bool = True,
 ) -> WorkflowRunSummary:
     """Run handwritten transcription followed by handwritten correction."""
     return _run_transcribe_and_correct_workflow(
@@ -63,6 +64,7 @@ def run_handwritten_htr_and_correction(
         correction_provider=correction_provider,
         progress_callback=progress_callback,
         cancellation_token=cancellation_token,
+        write_checkpoints=write_checkpoints,
     )
 
 
@@ -77,6 +79,7 @@ def run_printed_ocr_and_correction(
     correction_provider: AIProvider | None = None,
     progress_callback: ProgressCallback | None = None,
     cancellation_token: CancellationToken | None = None,
+    write_checkpoints: bool = True,
 ) -> WorkflowRunSummary:
     """Run printed OCR followed by printed correction."""
     return _run_transcribe_and_correct_workflow(
@@ -92,6 +95,7 @@ def run_printed_ocr_and_correction(
         correction_provider=correction_provider,
         progress_callback=progress_callback,
         cancellation_token=cancellation_token,
+        write_checkpoints=write_checkpoints,
     )
 
 
@@ -109,6 +113,7 @@ def _run_transcribe_and_correct_workflow(
     correction_provider: AIProvider | None = None,
     progress_callback: ProgressCallback | None = None,
     cancellation_token: CancellationToken | None = None,
+    write_checkpoints: bool = True,
 ) -> WorkflowRunSummary:
     """Run a transcription preset followed by its matching correction preset."""
     resolved_transcription_preset = transcription_preset or get_preset(transcription_preset_name)
@@ -120,6 +125,7 @@ def _run_transcribe_and_correct_workflow(
         page_sequences=page_sequences,
         progress_callback=progress_callback,
         cancellation_token=cancellation_token,
+        write_checkpoints=write_checkpoints,
     )
 
     step_summaries = [transcription_summary]
@@ -180,6 +186,7 @@ def _run_transcribe_and_correct_workflow(
         page_ids=corrected_page_ids,
         progress_callback=progress_callback,
         cancellation_token=cancellation_token,
+        write_checkpoints=write_checkpoints,
     )
     step_summaries.append(correction_summary)
     created_text_version_ids.extend(correction_summary.created_text_version_ids)

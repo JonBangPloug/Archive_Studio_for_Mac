@@ -34,6 +34,7 @@ def test_save_and_load_app_settings_round_trip(tmp_path: Path, monkeypatch) -> N
         last_import_dir=str(tmp_path / "imports"),
         workspace_layout="side_by_side",
         pages_pane_visible=False,
+        write_task_checkpoints=False,
         main_splitter_sizes=(220, 1180),
         stacked_workspace_sizes=(500, 350),
         side_by_side_workspace_sizes=(760, 620),
@@ -51,6 +52,7 @@ def test_save_and_load_app_settings_round_trip(tmp_path: Path, monkeypatch) -> N
     assert loaded.last_import_dir == str(tmp_path / "imports")
     assert loaded.workspace_layout == "side_by_side"
     assert loaded.pages_pane_visible is False
+    assert loaded.write_task_checkpoints is False
     assert loaded.main_splitter_sizes == (220, 1180)
     assert loaded.stacked_workspace_sizes == (500, 350)
     assert loaded.side_by_side_workspace_sizes == (760, 620)
@@ -62,6 +64,7 @@ def test_save_and_load_app_settings_round_trip(tmp_path: Path, monkeypatch) -> N
     assert 'last_import_dir = "' in rendered
     assert 'workspace_layout = "side_by_side"' in rendered
     assert "pages_pane_visible = false" in rendered
+    assert "write_task_checkpoints = false" in rendered
     assert "main_splitter_sizes = [220, 1180]" in rendered
 
 
@@ -129,6 +132,7 @@ def test_load_app_settings_ignores_legacy_plaintext_api_key(tmp_path: Path, monk
     assert loaded.openai.api_key == ""
     assert loaded.workspace_layout == "stacked"
     assert loaded.pages_pane_visible is True
+    assert loaded.write_task_checkpoints is True
 
 
 def test_save_app_settings_can_skip_credential_storage(tmp_path: Path, monkeypatch) -> None:

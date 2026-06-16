@@ -101,6 +101,8 @@ def test_registry_exposes_user_preset(monkeypatch) -> None:
 
     assert preset.name == custom.name
     assert preset.task_type == "transcribe"
+    assert preset.batch_size == 1
+    assert preset.model_config.max_batch_pages == 1
     assert custom.name in preset_names
 
 

@@ -24,6 +24,7 @@ class TaskLaunch:
     auto_selected_preset: bool = False
     custom_instructions: str = ""
     pages_per_call: int | None = None
+    write_checkpoints: bool = True
 
 
 @dataclass(frozen=True)
